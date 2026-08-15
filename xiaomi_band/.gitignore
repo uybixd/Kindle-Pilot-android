@@ -1,0 +1,6 @@
+node_modules/
+build/
+dist/
+sign/debug/*.pem
+sign/release/*.pem
+.DS_Store

@@ -1,0 +1,49 @@
+# macOS / Windows
+.DS_Store
+Thumbs.db
+
+# Android Studio / IntelliJ local state
+.idea/
+*.iml
+
+# Gradle / Kotlin caches and build output
+.gradle/
+.kotlin/
+**/build/
+/app/release/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Machine-local Android SDK configuration
+local.properties
+
+# Signing credentials and private keys
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+/xiaomi_band/sign/**/*.pem
+
+# Xiaomi Vela / Node.js dependencies and generated packages
+/xiaomi_band/node_modules/
+/xiaomi_band/dist/
+/xiaomi_band/log/
+/.temp_xiaomi_band/
+/release/
+/Donation_QR_Code/*
+!/Donation_QR_Code/README.md
+/app/libs/*.aar
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime and editor leftovers
+*.log
+*.hprof
+hs_err_pid*
+*.swp
+*.swo
+*~

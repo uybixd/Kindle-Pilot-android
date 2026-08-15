@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">KPilot</string>
+    <string name="remote_accessibility_description">Optionally intercepts hardware volume keys and keyboard arrow keys to turn Kindle pages when their mappings are enabled. It does not read screen content or accessibility events.</string>
+</resources>

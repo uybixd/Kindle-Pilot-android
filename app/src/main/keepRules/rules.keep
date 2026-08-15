@@ -1,0 +1,21 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+#
+# For more details, see
+#   https://d.android.com/r/tools/r8/keep-rules
+
+# If your project uses WebView with JS, uncomment the following
+# and specify the fully qualified class name to the JavaScript interface
+# class:
+#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
+#   public *;
+#}
+
+# JSch resolves these implementations from configuration class names at runtime.
+# Keep the providers KPilot uses without retaining optional desktop/BC adapters.
+-keepnames class com.jcraft.jsch.**
+-keep class com.jcraft.jsch.UserAuthNone { *; }
+-keep class com.jcraft.jsch.UserAuthPassword { *; }
+-keep class com.jcraft.jsch.UserAuthKeyboardInteractive { *; }
+-keep class com.jcraft.jsch.DH** { *; }
+-keep class com.jcraft.jsch.jce.** { *; }

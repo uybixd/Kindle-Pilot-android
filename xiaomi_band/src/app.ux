@@ -1,0 +1,7 @@
+<script>
+export default {
+  onCreate() {
+    console.log('KPilot band app created')
+  }
+}
+</script>

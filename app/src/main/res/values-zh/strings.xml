@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">KPilot</string>
+    <string name="remote_accessibility_description">启用对应控制方式后，可选地拦截硬件音量键和键盘方向键来控制 Kindle 翻页。不会读取屏幕内容或辅助功能事件。</string>
+</resources>

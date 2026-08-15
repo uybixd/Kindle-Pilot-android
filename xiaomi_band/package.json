@@ -1,0 +1,20 @@
+{
+  "name": "kpilot-xiaomi-band",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "description": "Minimal Xiaomi Vela remote for KPilot",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "aiot server --watch --open-nuttx",
+    "generate:beads": "node scripts/generate-bead-frames.js",
+    "build": "aiot build",
+    "release": "aiot release"
+  },
+  "devDependencies": {
+    "@aiot-toolkit/velasim": "^0.1.23",
+    "aiot-toolkit": "^2.0.5"
+  }
+}

@@ -1,0 +1,745 @@
+<template>
+  <div class="page">
+    <div if="{{activeView === 'remote'}}" class="screen remote-screen">
+      <image
+        class="bead-strip bead-strip-forward {{nextAnimationClass}}"
+        src="{{currentStripSrc}}"
+      ></image>
+      <image
+        if="{{showReverseAnimation}}"
+        class="bead-strip bead-strip-reverse bead-strip-previous"
+        src="{{reverseStripSrc}}"
+      ></image>
+      <div
+        class="gesture-layer"
+        @touchstart="onRemoteTouchStart"
+        @touchmove="onRemoteTouchMove"
+        @touchend="onRemoteTouchEnd"
+      ></div>
+    </div>
+
+    <div if="{{activeView === 'settings'}}" class="screen settings-screen" @swipe="handleSwipe">
+      <text class="settings-back">右滑返回 →</text>
+      <text class="settings-title">设置</text>
+
+      <div class="settings-card instructions-card">
+        <text class="setting-title">操作方式</text>
+        <div class="instruction-row first-instruction">
+          <text class="instruction-gesture">上滑</text>
+          <text class="instruction-action">下一页</text>
+        </div>
+        <div class="instruction-row">
+          <text class="instruction-gesture">下滑</text>
+          <text class="instruction-action">上一页</text>
+        </div>
+        <div class="instruction-row">
+          <text class="instruction-gesture">左滑</text>
+          <text class="instruction-action">进入设置</text>
+        </div>
+        <div class="instruction-row">
+          <text class="instruction-gesture">右滑</text>
+          <text class="instruction-action">返回 / 退出</text>
+        </div>
+      </div>
+
+      <div class="settings-card preferences-card">
+        <div class="preference-row">
+          <div class="setting-copy">
+            <text class="setting-title">屏幕常亮</text>
+            <text class="setting-description">使用遥控时不自动熄屏</text>
+          </div>
+          <switch
+            class="setting-switch"
+            checked="{{keepScreenOnEnabled}}"
+            @change="onKeepScreenOnChange"
+          ></switch>
+        </div>
+        <div class="preference-divider"></div>
+        <div class="preference-row">
+          <div class="setting-copy">
+            <text class="setting-title">翻页震动</text>
+            <text class="setting-description">每次滑动时轻振一次</text>
+          </div>
+          <switch
+            class="setting-switch"
+            checked="{{vibrationEnabled}}"
+            @change="onVibrationChange"
+          ></switch>
+        </div>
+      </div>
+
+      <div class="settings-card connection-card">
+        <div class="settings-connection-row">
+          <div class="status-dot {{connected ? 'status-dot-connected' : 'status-dot-disconnected'}}"></div>
+          <text class="settings-connection-text">手机{{connectionText}}</text>
+        </div>
+        <input class="reconnect-button" type="button" value="重新连接" @click="retryConnection" />
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import interconnect from '@system.interconnect'
+import brightness from '@system.brightness'
+import prompt from '@system.prompt'
+import storage from '@system.storage'
+import vibrator from '@system.vibrator'
+
+export default {
+  private: {
+    connection: null,
+    connected: false,
+    busy: false,
+    connectionText: '连接中…',
+    activeView: 'remote',
+    keepScreenOnEnabled: true,
+    vibrationEnabled: true,
+    beadIndex: 0,
+    currentStripSrc: '',
+    reverseStripSrc: '',
+    nextAnimationClass: '',
+    showReverseAnimation: false,
+    animationQueue: [],
+    pendingAction: '',
+    animationToken: 0,
+    animationTimer: 0,
+    touchStartX: 0,
+    touchStartY: 0,
+    touchTracking: false,
+    touchHandled: false,
+    sequence: 0,
+    connectionCheckId: 0,
+    pageVisible: false
+  },
+
+  onInit() {
+    this.currentStripSrc = this.stripForTransition(0)
+  },
+
+  onReady() {
+    this.loadPreferences()
+    this.createConnection()
+    this.refreshConnection()
+    setTimeout(() => this.showRestingFrame(), 30)
+  },
+
+  stripForTransition(beadIndex) {
+    const group = this.isSpecialTransition(beadIndex)
+      ? (beadIndex < 10 ? `0${beadIndex}` : `${beadIndex}`)
+      : 'common'
+    return `/common/bead_frames/beads_${group}_strip.png`
+  },
+
+  isSpecialTransition(startIndex) {
+    return startIndex === 0 || startIndex === 1 || startIndex === 16 || startIndex === 17
+  },
+
+  loadPreferences() {
+    storage.get({
+      key: 'keep_screen_on_enabled',
+      default: '1',
+      success: (value) => {
+        this.keepScreenOnEnabled = value !== '0'
+        this.applyScreenPolicy()
+      }
+    })
+    storage.get({
+      key: 'vibration_enabled',
+      default: '1',
+      success: (value) => {
+        this.vibrationEnabled = value !== '0'
+      }
+    })
+    storage.get({
+      key: 'bead_index',
+      default: '0',
+      success: (value) => {
+        const parsed = parseInt(value, 10)
+        this.beadIndex = isNaN(parsed) ? 0 : ((parsed % 18) + 18) % 18
+        setTimeout(() => this.showRestingFrame(), 0)
+      }
+    })
+  },
+
+  onVibrationChange(event) {
+    this.vibrationEnabled = !!(event && event.checked)
+    storage.set({
+      key: 'vibration_enabled',
+      value: this.vibrationEnabled ? '1' : '0'
+    })
+  },
+
+  onKeepScreenOnChange(event) {
+    this.keepScreenOnEnabled = !!(event && event.checked)
+    storage.set({
+      key: 'keep_screen_on_enabled',
+      value: this.keepScreenOnEnabled ? '1' : '0'
+    })
+    this.applyScreenPolicy()
+  },
+
+  applyScreenPolicy() {
+    brightness.setKeepScreenOn({
+      keepScreenOn: this.pageVisible && this.keepScreenOnEnabled,
+      fail: (error, code) => {
+        console.warn(`setKeepScreenOn failed: ${code || (error && error.code) || 'unknown'}`)
+      }
+    })
+  },
+
+  onShow() {
+    this.pageVisible = true
+    this.applyScreenPolicy()
+    if (this.connection) {
+      // Interconnect may not be ready during onReady. Re-check on every show so
+      // an early negative diagnosis cannot leave the page permanently offline.
+      this.refreshConnection()
+    }
+    if (this.activeView === 'remote') {
+      setTimeout(() => this.showRestingFrame(), 0)
+    }
+  },
+
+  onHide() {
+    this.pageVisible = false
+    this.applyScreenPolicy()
+  },
+
+  onBackPress() {
+    if (this.activeView === 'settings') {
+      this.showRemote()
+      return true
+    }
+  },
+
+  showRemote() {
+    this.activeView = 'remote'
+    setTimeout(() => this.showRestingFrame(), 0)
+  },
+
+  showRestingFrame() {
+    if (this.activeView !== 'remote' || this.busy) return
+    this.nextAnimationClass = ''
+    this.showReverseAnimation = false
+    this.currentStripSrc = this.stripForTransition(this.beadIndex)
+  },
+
+  createConnection() {
+    if (this.connection) return
+    this.connection = interconnect.instance()
+    this.connection.onopen = (result) => {
+      console.info(`[KPilot] interconnect open reconnected=${!!(result && result.isReconnected)}`)
+      this.connectionCheckId += 1
+      this.connected = true
+      this.connectionText = '已连接'
+    }
+    this.connection.onclose = (result) => {
+      console.warn(`[KPilot] interconnect closed code=${(result && result.code) || 'unknown'}`)
+      this.connectionCheckId += 1
+      this.connected = false
+      this.connectionText = '未连接'
+      this.showConnectionFailure('手机连接已断开')
+    }
+    this.connection.onerror = (error) => {
+      console.warn(`[KPilot] interconnect error code=${(error && error.code) || 'unknown'}`)
+      this.connectionCheckId += 1
+      this.connected = false
+      this.connectionText = '未连接'
+      this.showConnectionFailure(`连接失败 (${(error && error.code) || '未知'})`)
+    }
+  },
+
+  refreshConnection() {
+    this.createConnection()
+    this.connectionCheckId += 1
+    const checkId = this.connectionCheckId
+    this.connected = false
+    this.connectionText = '连接中…'
+
+    // diagnosis is authoritative on current firmware. getApkStatus polling is
+    // retained as a fallback because some Band firmware misses the callback.
+    if (typeof this.connection.diagnosis === 'function') {
+      this.connection.diagnosis({
+        timeout: 5000,
+        success: (result) => {
+          if (checkId !== this.connectionCheckId) return
+          console.info(`[KPilot] diagnosis status=${result.status}`)
+          if (result.status === 0) {
+            this.finishConnectionCheck(checkId, true, '已连接')
+          } else {
+            this.finishConnectionCheck(checkId, false, this.diagnosisMessage(result.status))
+          }
+        },
+        fail: (error, code) => {
+          if (checkId !== this.connectionCheckId) return
+          console.warn(`[KPilot] diagnosis failed code=${code || (error && error.code) || 'unknown'}`)
+          this.finishConnectionCheck(
+            checkId,
+            false,
+            this.diagnosisMessage(code || (error && error.code))
+          )
+        }
+      })
+    }
+
+    this.pollApkStatus(checkId, 0)
+  },
+
+  pollApkStatus(checkId, attempt) {
+    if (checkId !== this.connectionCheckId) return
+    let status = ''
+    if (typeof this.connection.getApkStatus === 'function') {
+      try {
+        status = this.connection.getApkStatus()
+      } catch (error) {
+        status = ''
+      }
+    }
+    if (status === 'CONNECTED') {
+      this.finishConnectionCheck(checkId, true, '已连接')
+      return
+    }
+    if (attempt < 10) {
+      setTimeout(() => this.pollApkStatus(checkId, attempt + 1), 500)
+      return
+    }
+    this.finishConnectionCheck(
+      checkId,
+      false,
+      status === 'CONNECTING' ? '连接超时，请重试' : '手机未连接'
+    )
+  },
+
+  finishConnectionCheck(checkId, connected, message) {
+    if (checkId !== this.connectionCheckId) return
+    this.connectionCheckId += 1
+    this.connected = connected
+    this.connectionText = connected ? '已连接' : '未连接'
+    if (!connected) {
+      this.showConnectionFailure(message)
+    }
+  },
+
+  diagnosisMessage(status) {
+    if (status === 1001) return '手机未安装匹配应用'
+    if (status === 204) return '连接超时，请重试'
+    if (status === 1006) return '手机连接已断开'
+    return '手机未连接'
+  },
+
+  showConnectionFailure(message) {
+    prompt.showToast({
+      message: `${message}，请左滑进入设置后重试`,
+      duration: 2500
+    })
+  },
+
+  showError(message) {
+    prompt.showToast({ message, duration: 2200 })
+  },
+
+  touchPoint(event, preferChanged) {
+    if (!event) return null
+    const primary = preferChanged ? event.changedTouches : event.touches
+    const fallback = preferChanged ? event.touches : event.changedTouches
+    const points = primary && primary.length ? primary : fallback
+    return points && points.length ? points[0] : null
+  },
+
+  touchDirection(point, minimumDistance) {
+    if (!point) return ''
+    const deltaX = point.clientX - this.touchStartX
+    const deltaY = point.clientY - this.touchStartY
+    const absX = Math.abs(deltaX)
+    const absY = Math.abs(deltaY)
+    if (Math.max(absX, absY) < minimumDistance) return ''
+    if (absY >= absX * 1.15) return deltaY < 0 ? 'up' : 'down'
+    if (absX >= absY * 1.15) return deltaX < 0 ? 'left' : 'right'
+    return ''
+  },
+
+  onRemoteTouchStart(event) {
+    const point = this.touchPoint(event, false)
+    if (!point) return
+    this.touchStartX = point.clientX
+    this.touchStartY = point.clientY
+    this.touchTracking = true
+    this.touchHandled = false
+  },
+
+  onRemoteTouchMove(event) {
+    if (!this.touchTracking || this.touchHandled) return
+    const direction = this.touchDirection(this.touchPoint(event, false), 28)
+    if (!direction) return
+    this.touchHandled = true
+    this.handleSwipe({ direction })
+  },
+
+  onRemoteTouchEnd(event) {
+    if (this.touchTracking && !this.touchHandled) {
+      const direction = this.touchDirection(this.touchPoint(event, true), 22)
+      if (direction) this.handleSwipe({ direction })
+    }
+    this.touchTracking = false
+    this.touchHandled = false
+  },
+
+  handleSwipe(event) {
+    if (!event) return
+    if (event.direction === 'right') {
+      if (this.activeView === 'settings') {
+        this.showRemote()
+      } else {
+        this.$app.exit()
+      }
+      return
+    }
+    if (this.activeView === 'settings') {
+      return
+    }
+    if (event.direction === 'left') {
+      this.activeView = 'settings'
+      return
+    }
+    if (event.direction !== 'up' && event.direction !== 'down') return
+    // The cached connection flag can lag behind the actual wearable channel.
+    // Send every gesture immediately; visual animation is queued separately.
+    this.sendPageCommand(event.direction === 'up' ? 'next' : 'previous')
+  },
+
+  retryConnection() {
+    prompt.showToast({ message: '正在重新连接…', duration: 1500 })
+    this.refreshConnection()
+  },
+
+  sendPageCommand(action) {
+    this.sequence += 1
+    const requestId = `${Date.now()}-${this.sequence}`
+    try {
+      this.connection.send({
+        data: {
+          version: 1,
+          type: 'kindle.page',
+          action,
+          requestId
+        },
+        success: () => {
+          console.info(`[KPilot] command sent action=${action} requestId=${requestId}`)
+          this.connected = true
+          this.connectionText = '已连接'
+        },
+        fail: (error, code) => {
+          this.connected = false
+          this.connectionText = '未连接'
+          console.warn(
+            `[KPilot] command failed action=${action} code=${code || (error && error.code) || 'unknown'}`
+          )
+          this.showError(`发送失败 (${code || (error && error.code) || '未知'})`)
+          this.refreshConnection()
+        }
+      })
+    } catch (error) {
+      this.connected = false
+      this.connectionText = '未连接'
+      console.warn(`[KPilot] command threw action=${action} error=${error && error.message}`)
+      this.showError('发送失败，请重新连接')
+      this.refreshConnection()
+    }
+    // Give the transport first priority; animation and haptics are visual feedback only.
+    this.queueBeadAnimation(action)
+  },
+
+  queueBeadAnimation(action) {
+    if (this.vibrationEnabled) vibrator.vibrate({ mode: 'short' })
+    this.animationQueue.push(action)
+    if (!this.busy) this.startNextBeadAnimation()
+  },
+
+  startNextBeadAnimation() {
+    if (this.busy || !this.animationQueue.length) return
+    this.runBeadAnimation(this.animationQueue.shift())
+  },
+
+  runBeadAnimation(action) {
+    this.busy = true
+    this.animationToken += 1
+    const animationToken = this.animationToken
+    this.pendingAction = action
+    const transitionStart = action === 'next'
+      ? this.beadIndex
+      : (this.beadIndex + 17) % 18
+    if (action === 'next') {
+      this.showReverseAnimation = false
+      this.nextAnimationClass = 'bead-strip-next'
+    } else {
+      this.nextAnimationClass = ''
+      this.reverseStripSrc = this.stripForTransition(transitionStart)
+      this.showReverseAnimation = true
+    }
+    if (this.animationTimer) clearTimeout(this.animationTimer)
+    this.animationTimer = setTimeout(
+      () => this.finishBeadAnimation(animationToken),
+      420
+    )
+  },
+
+  finishBeadAnimation(animationToken) {
+    if (animationToken !== this.animationToken || !this.pendingAction) return
+    const action = this.pendingAction
+    this.pendingAction = ''
+    this.animationTimer = 0
+    this.beadIndex = action === 'next'
+      ? (this.beadIndex + 1) % 18
+      : (this.beadIndex + 17) % 18
+    this.currentStripSrc = this.stripForTransition(this.beadIndex)
+    this.nextAnimationClass = ''
+    this.showReverseAnimation = false
+    this.busy = false
+    storage.set({ key: 'bead_index', value: `${this.beadIndex}` })
+    if (this.animationQueue.length) {
+      setTimeout(() => this.startNextBeadAnimation(), 0)
+    }
+  },
+
+  onDestroy() {
+    this.pageVisible = false
+    this.applyScreenPolicy()
+    this.connectionCheckId += 1
+    if (this.animationTimer) {
+      clearTimeout(this.animationTimer)
+      this.animationTimer = 0
+    }
+    this.animationQueue = []
+    this.pendingAction = ''
+    this.busy = false
+  }
+}
+</script>
+
+<style>
+.page {
+  width: 100%;
+  height: 100%;
+  background-color: #080808;
+  flex-direction: column;
+  align-items: center;
+}
+
+.screen {
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+}
+
+.remote-screen {
+  position: relative;
+  overflow: hidden;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 3px;
+}
+
+.status-dot-connected {
+  background-color: #69cf83;
+}
+
+.status-dot-disconnected {
+  background-color: #d18a5a;
+}
+
+.bead-strip {
+  position: absolute;
+  left: 16px;
+  width: 160px;
+  height: 654px;
+  object-fit: none;
+}
+
+.bead-strip-forward {
+  top: 0px;
+  transform: translateY(0px);
+}
+
+.bead-strip-reverse {
+  top: -164px;
+  transform: translateY(0px);
+}
+
+.bead-strip-next {
+  transform: translateY(-164px);
+  animation-name: bead-next;
+  animation-duration: 400ms;
+  animation-timing-function: linear;
+  animation-iteration-count: 1;
+}
+
+.bead-strip-previous {
+  transform: translateY(164px);
+  animation-name: bead-previous;
+  animation-duration: 400ms;
+  animation-timing-function: linear;
+  animation-iteration-count: 1;
+}
+
+@keyframes bead-next {
+  0% {
+    transform: translateY(0px);
+  }
+  100% {
+    transform: translateY(-164px);
+  }
+}
+
+@keyframes bead-previous {
+  0% {
+    transform: translateY(0px);
+  }
+  100% {
+    transform: translateY(164px);
+  }
+}
+
+.gesture-layer {
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.01);
+}
+
+.settings-screen {
+  padding: 20px 14px 12px;
+  align-items: flex-start;
+}
+
+.settings-back {
+  color: #77736c;
+  font-size: 10px;
+}
+
+.settings-title {
+  margin-top: 12px;
+  color: #f6f1e8;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.settings-card {
+  width: 100%;
+  border-radius: 18px;
+  background-color: #171615;
+}
+
+.instructions-card {
+  height: 154px;
+  margin-top: 12px;
+  padding: 12px;
+  flex-direction: column;
+}
+
+.instruction-row {
+  width: 100%;
+  margin-top: 6px;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.first-instruction {
+  margin-top: 8px;
+}
+
+.instruction-gesture {
+  color: #c78f2f;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.instruction-action {
+  color: #aaa59d;
+  font-size: 12px;
+}
+
+.preferences-card {
+  height: 128px;
+  margin-top: 8px;
+  padding-left: 14px;
+  padding-right: 12px;
+  flex-direction: column;
+}
+
+.preference-row {
+  width: 100%;
+  height: 63px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preference-divider {
+  width: 100%;
+  height: 1px;
+  background-color: #2b2926;
+}
+
+.setting-copy {
+  flex-direction: column;
+}
+
+.setting-title {
+  color: #f1ede5;
+  font-size: 15px;
+  font-weight: bold;
+}
+
+.setting-description {
+  width: 105px;
+  margin-top: 5px;
+  color: #8c8881;
+  font-size: 9px;
+  lines: 2;
+}
+
+.setting-switch {
+  width: 48px;
+  height: 28px;
+  thumb-color: #fff8e6;
+  track-color: #c78f2f;
+}
+
+.connection-card {
+  height: 88px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  flex-direction: column;
+  align-items: center;
+}
+
+.settings-connection-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-connection-text {
+  color: #b9b4ab;
+  font-size: 11px;
+}
+
+.reconnect-button {
+  width: 100%;
+  height: 38px;
+  margin-top: 9px;
+  border-radius: 19px;
+  background-color: #c78f2f;
+  color: #17120a;
+  font-size: 14px;
+  font-weight: bold;
+}
+</style>
