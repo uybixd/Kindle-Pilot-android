@@ -43,4 +43,4 @@ If you keep the support page, replace them with your own images. Otherwise, remo
 
 ## License
 
-KPilot source code is licensed under the [MIT License](LICENSE). Third-party software and assets remain subject to their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+KPilot source code is licensed under the [GNU General Public License v3.0](LICENSE) (`GPL-3.0-only`). Third-party software and assets remain subject to their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

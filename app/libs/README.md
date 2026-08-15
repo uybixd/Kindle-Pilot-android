@@ -2,7 +2,7 @@
 
 `xms-wearable-lib_1.4_release.aar` is Xiaomi's wearable companion SDK v1.4.
 It is required for the optional Xiaomi Band integration but is intentionally
-excluded from this repository and is not covered by KPilot's MIT License.
+excluded from this repository and is not covered by KPilot's GNU General Public License v3.0.
 
 Download Xiaomi's official
 [`interconnect_dev_test_demo.zip`](https://cdn.cnbj3-fusion.fds.api.mi-img.com/quickapp-vela/interconnect_dev_test_demo.zip),

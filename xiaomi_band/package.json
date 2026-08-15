@@ -1,7 +1,7 @@
 {
   "name": "kpilot-xiaomi-band",
   "version": "1.0.0",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "private": true,
   "description": "Minimal Xiaomi Vela remote for KPilot",
   "engines": {

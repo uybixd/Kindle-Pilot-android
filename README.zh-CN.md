@@ -43,4 +43,4 @@ Donation_QR_Code/mm_reward_qrcode_1786536180927.png
 
 ## 许可证
 
-KPilot 源代码采用 [MIT License](LICENSE)。第三方软件和素材仍适用各自的条款，详情请参阅 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+KPilot 源代码采用 [GNU General Public License v3.0](LICENSE)（`GPL-3.0-only`）。第三方软件和素材仍适用各自的条款，详情请参阅 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
