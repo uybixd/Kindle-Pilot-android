@@ -30,4 +30,13 @@ class AppTextTest {
         assertEquals("三体", localizeAppText("三体", "en"))
         assertEquals("The Left Hand of Darkness", localizeAppText("The Left Hand of Darkness", "zh"))
     }
+
+    @Test
+    fun libraryReviewAndWritebackLabelsAreLocalized() {
+        assertEquals("Library", localizeAppText("书库", "en"))
+        assertEquals("3 reviewed today", localizeAppText("今天已复习 3 条", "en"))
+        assertEquals("2 clippings · AZW3", localizeAppText("2 条摘抄 · AZW3", "en"))
+        assertEquals("Send to Kindle", localizeAppText("发送到 Kindle", "en"))
+        assertEquals("Batch 2 / 9", localizeAppText("本组 2 / 9", "en"))
+    }
 }

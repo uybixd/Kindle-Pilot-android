@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -64,6 +65,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilePresent
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -100,24 +103,32 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hongxiang.kpilot.model.KindleCommand
+import com.hongxiang.kpilot.data.NavigationItem
+import com.hongxiang.kpilot.data.NavigationOptions
+import com.hongxiang.kpilot.library.LibraryScreen
+import com.hongxiang.kpilot.review.ReviewScreen
+import com.hongxiang.kpilot.ui.NoteWritebackSection
 import com.hongxiang.kpilot.i18n.AppText as Text
 import com.hongxiang.kpilot.i18n.localizeAppText
 import com.hongxiang.kpilot.i18n.localizedText
@@ -153,11 +164,15 @@ internal fun commandForVolumeKey(keyCode: Int): KindleCommand? = when (keyCode) 
 }
 
 private enum class Destination(val label: String, val icon: ImageVector) {
-    SEND("传书", Icons.AutoMirrored.Filled.Send),
+    LIBRARY("书库", Icons.AutoMirrored.Filled.LibraryBooks),
     NOTES("摘抄", Icons.AutoMirrored.Filled.Notes),
+    REVIEW("复习", Icons.Filled.History),
     VOCABULARY("生词", Icons.Filled.Spellcheck),
     REMOTE("遥控", Icons.Filled.SettingsRemote),
-    SETTINGS("设置", Icons.Filled.Settings)
+    SEND("传书", Icons.AutoMirrored.Filled.Send),
+    SETTINGS("设置", Icons.Filled.Settings);
+
+    val navigationItem: NavigationItem get() = NavigationItem.valueOf(name)
 }
 
 class MainActivity : ComponentActivity() {
@@ -207,6 +222,10 @@ private fun KPilotApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     var destination by rememberSaveable { mutableStateOf(Destination.NOTES) }
+    var secondaryParent by rememberSaveable { mutableStateOf(Destination.NOTES) }
+    var transientDestination by rememberSaveable { mutableStateOf(false) }
+    var noteReturnDestination by rememberSaveable { mutableStateOf(Destination.NOTES) }
+    val screenStateHolder = rememberSaveableStateHolder()
     var notesSearchVisible by rememberSaveable { mutableStateOf(false) }
     var vocabularySearchVisible by rememberSaveable { mutableStateOf(false) }
     var exportMenuExpanded by remember { mutableStateOf(false) }
@@ -214,6 +233,24 @@ private fun KPilotApp(viewModel: MainViewModel) {
     var pendingVocabularyExport by remember { mutableStateOf<VocabularyExportFormat?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val showingNoteDetail = destination == Destination.NOTES && state.selectedNoteId != null
+    val showingSecondaryScreen = transientDestination && destination.navigationItem !in state.navigationItems
+
+    fun navigateTo(item: Destination) {
+        secondaryParent = destination
+        destination = item
+        transientDestination = item.navigationItem !in state.navigationItems
+        exportMenuExpanded = false
+    }
+
+    fun closeNote() {
+        viewModel.selectNote(null)
+        if (noteReturnDestination != Destination.NOTES) navigateTo(noteReturnDestination)
+        noteReturnDestination = Destination.NOTES
+    }
+
+    LaunchedEffect(state.navigationItems) {
+        if (!transientDestination && destination.navigationItem !in state.navigationItems) destination = Destination.NOTES
+    }
 
     fun exportNotesNow(format: ClippingsExportFormat) {
         coroutineScope.launch {
@@ -266,7 +303,12 @@ private fun KPilotApp(viewModel: MainViewModel) {
         }
     }
 
-    BackHandler(showingNoteDetail) { viewModel.selectNote(null) }
+    BackHandler(showingNoteDetail || showingSecondaryScreen) {
+        if (showingNoteDetail) closeNote() else {
+            destination = secondaryParent.takeIf { it.navigationItem in state.navigationItems } ?: Destination.NOTES
+            transientDestination = false
+        }
+    }
 
     state.collision?.let { collision ->
         AlertDialog(
@@ -292,8 +334,13 @@ private fun KPilotApp(viewModel: MainViewModel) {
                     Text(if (showingNoteDetail) "摘抄详情" else destination.label, fontWeight = FontWeight.SemiBold)
                 },
                 navigationIcon = {
-                    if (showingNoteDetail) {
-                        IconButton(onClick = { viewModel.selectNote(null) }) {
+                    if (showingNoteDetail || showingSecondaryScreen) {
+                        IconButton(onClick = {
+                            if (showingNoteDetail) closeNote() else {
+                                destination = secondaryParent.takeIf { it.navigationItem in state.navigationItems } ?: Destination.NOTES
+                                transientDestination = false
+                            }
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = localizedText("返回"))
                         }
                     }
@@ -360,8 +407,11 @@ private fun KPilotApp(viewModel: MainViewModel) {
             if (!showingNoteDetail) {
                 KPilotBottomBar(
                     selected = destination,
+                    items = Destination.entries.filter { it.navigationItem in state.navigationItems },
                     onSelect = { item ->
                         destination = item
+                        transientDestination = false
+                        noteReturnDestination = Destination.NOTES
                         exportMenuExpanded = false
                     }
                 )
@@ -369,12 +419,36 @@ private fun KPilotApp(viewModel: MainViewModel) {
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            when (destination) {
-                Destination.SEND -> SendScreen(viewModel, state)
-                Destination.NOTES -> NotesScreen(viewModel, state, notesSearchVisible)
-                Destination.REMOTE -> RemoteScreen(viewModel, state)
-                Destination.VOCABULARY -> VocabularyScreen(viewModel, state, vocabularySearchVisible)
-                Destination.SETTINGS -> SettingsScreen(viewModel, state)
+            screenStateHolder.SaveableStateProvider(destination.name) {
+                when (destination) {
+                    Destination.LIBRARY -> LibraryScreen(
+                        snapshot = state.library,
+                        clippings = state.notes,
+                        syncing = state.librarySyncing,
+                        errorMessage = state.libraryError,
+                        onRefresh = viewModel::syncLibrary,
+                        onSendBooks = { navigateTo(Destination.SEND) },
+                        onOpenClipping = { note ->
+                            noteReturnDestination = Destination.LIBRARY
+                            viewModel.selectNote(note.id)
+                            navigateTo(Destination.NOTES)
+                        }
+                    )
+                    Destination.REVIEW -> ReviewScreen(
+                        notes = state.notes, settings = state.settings,
+                        noteDrafts = state.noteDrafts,
+                        onOpenNote = { id ->
+                            noteReturnDestination = Destination.REVIEW
+                            viewModel.selectNote(id)
+                            navigateTo(Destination.NOTES)
+                        }
+                    )
+                    Destination.SEND -> SendScreen(viewModel, state)
+                    Destination.NOTES -> NotesScreen(viewModel, state, notesSearchVisible, onReview = { navigateTo(Destination.REVIEW) })
+                    Destination.REMOTE -> RemoteScreen(viewModel, state)
+                    Destination.VOCABULARY -> VocabularyScreen(viewModel, state, vocabularySearchVisible)
+                    Destination.SETTINGS -> SettingsScreen(viewModel, state, onOpenDestination = { navigateTo(it) })
+                }
             }
         }
     }
@@ -406,13 +480,13 @@ private fun TactileIconButton(onClick: () -> Unit, content: @Composable () -> Un
 }
 
 @Composable
-private fun KPilotBottomBar(selected: Destination, onSelect: (Destination) -> Unit) {
+private fun KPilotBottomBar(selected: Destination, items: List<Destination>, onSelect: (Destination) -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shadowElevation = 7.dp
     ) {
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(52.dp)) {
-            Destination.entries.forEach { item ->
+        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(68.dp)) {
+            items.forEach { item ->
                 val isSelected = selected == item
                 Box(
                     modifier = Modifier
@@ -422,15 +496,19 @@ private fun KPilotBottomBar(selected: Destination, onSelect: (Destination) -> Un
                             if (isSelected) MaterialTheme.colorScheme.surfaceContainerHigh
                             else MaterialTheme.colorScheme.surfaceContainer
                         )
-                        .clickable { onSelect(item) },
+                        .selectable(selected = isSelected, role = Role.Tab, onClick = { onSelect(item) }),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = item.icon,
-                    contentDescription = localizedText(item.label),
-                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp).size(29.dp)
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Icon(
+                            imageVector = item.icon,
+                            contentDescription = null,
+                            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(item.label, style = MaterialTheme.typography.labelSmall,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -543,11 +621,11 @@ private fun TransferRow(item: TransferItem, viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible: Boolean) {
+private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible: Boolean, onReview: () -> Unit) {
     val notesListState = rememberLazyListState()
     val selected = state.selectedNoteId?.let { id -> state.notes.firstOrNull { it.id == id } }
     if (selected != null) {
-        NoteDetail(selected)
+        NoteDetail(selected, viewModel, state)
         return
     }
 
@@ -618,6 +696,13 @@ private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible:
             Modifier.padding(start = 20.dp, top = 4.dp, end = 20.dp, bottom = 2.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (state.notes.any { it.kind in setOf(ClippingKind.HIGHLIGHT, ClippingKind.NOTE) && it.text.isNotBlank() }) {
+                OutlinedButton(onClick = onReview, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.History, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("笔记复习")
+                }
+            }
             if (state.notesError) {
                 CompactErrorBanner(
                     message = state.notesMessage,
@@ -774,7 +859,7 @@ private fun NoteRow(note: KindleClipping, showBook: Boolean, onClick: () -> Unit
 }
 
 @Composable
-private fun NoteDetail(note: KindleClipping) {
+private fun NoteDetail(note: KindleClipping, viewModel: MainViewModel, state: UiState) {
     var showDetails by rememberSaveable(note.id) { mutableStateOf(false) }
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -799,6 +884,12 @@ private fun NoteDetail(note: KindleClipping) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(note.bookTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 note.author?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        }
+        if (note.kind == ClippingKind.HIGHLIGHT) {
+            item {
+                NoteWritebackSection(note, state, viewModel::saveNoteDraft, viewModel::sendNoteToKindle,
+                    viewModel::discardNoteDraft, viewModel::reloadNoteDrafts)
             }
         }
         if (note.kindleNotes.isNotEmpty()) {
@@ -1199,7 +1290,7 @@ private fun FlipCommandRows(
 }
 
 @Composable
-private fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
+private fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenDestination: (Destination) -> Unit) {
     val settings = state.settings
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
@@ -1288,6 +1379,22 @@ private fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
         }
         if (state.busy || state.isError || state.status != "请填写 Kindle 连接信息") {
             CompactBanner(state.status, state.isError, state.busy)
+        }
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        Text("底部导航栏", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("最多显示 5 个入口，摘抄和设置始终保留。关闭的入口仍可在下方打开。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SettingsGroup {
+            Destination.entries.filter { it.navigationItem !in NavigationOptions.required }.forEach { item ->
+                val checked = item.navigationItem in state.navigationItems
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(item.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    TextButton(onClick = { onOpenDestination(item) }, modifier = Modifier.weight(1f)) { Text(item.label) }
+                    Switch(checked = checked,
+                        onCheckedChange = { viewModel.setNavigationItem(item.navigationItem, it) },
+                        enabled = checked || state.navigationItems.size < NavigationOptions.maximumItems)
+                }
+            }
         }
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
         ListItem(

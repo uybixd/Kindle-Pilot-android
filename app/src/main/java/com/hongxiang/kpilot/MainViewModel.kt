@@ -9,6 +9,11 @@ import androidx.lifecycle.viewModelScope
 import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.data.AppPreferences
 import com.hongxiang.kpilot.data.SecureSettingsStore
+import com.hongxiang.kpilot.data.NavigationItem
+import com.hongxiang.kpilot.data.NavigationOptions
+import com.hongxiang.kpilot.data.cacheScope
+import com.hongxiang.kpilot.library.LibraryService
+import com.hongxiang.kpilot.library.LibrarySnapshot
 import com.hongxiang.kpilot.export.DownloadExportStore
 import com.hongxiang.kpilot.band.XiaomiBandController
 import com.hongxiang.kpilot.model.CommandSink
@@ -18,6 +23,11 @@ import com.hongxiang.kpilot.notes.ClippingsExporter
 import com.hongxiang.kpilot.notes.ClippingsSnapshot
 import com.hongxiang.kpilot.notes.ClippingsSyncService
 import com.hongxiang.kpilot.notes.KindleClipping
+import com.hongxiang.kpilot.notes.ClippingKind
+import com.hongxiang.kpilot.notes.NoteDraft
+import com.hongxiang.kpilot.notes.NoteDraftStore
+import com.hongxiang.kpilot.notes.stageNoteDraft
+import com.hongxiang.kpilot.notes.writeback.KindleNoteWritebackService
 import com.hongxiang.kpilot.notes.NotesDiagnostics
 import com.hongxiang.kpilot.notes.NotesSyncException
 import com.hongxiang.kpilot.ssh.KindleSshClient
@@ -49,6 +59,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.Instant
 
@@ -71,6 +83,17 @@ data class UiState(
     val transfers: List<TransferItem> = emptyList(),
     val collision: TransferCollision? = null,
     val transferMessage: String = "请选择要发送的书籍",
+    val navigationItems: Set<NavigationItem> = NavigationOptions.defaults,
+    val library: LibrarySnapshot? = null,
+    val librarySyncing: Boolean = false,
+    val libraryError: String? = null,
+    val noteDrafts: Map<String, NoteDraft> = emptyMap(),
+    val noteDraftsLoading: Boolean = true,
+    val noteDraftsAvailable: Boolean = false,
+    val noteDraftSaving: Boolean = false,
+    val noteWritingId: String? = null,
+    val noteWriteMessage: String = "",
+    val noteWriteError: Boolean = false,
     val notes: List<KindleClipping> = emptyList(),
     val notesQuery: String = "",
     val selectedBook: String? = null,
@@ -106,6 +129,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     private val ssh = KindleSshClient()
     private val transferService = KindleTransferService(application.contentResolver)
     private val clippingsService = ClippingsSyncService(application)
+    private val libraryService = LibraryService(application)
+    private val noteDraftStore = NoteDraftStore(application)
+    private val writebackService = KindleNoteWritebackService(application)
+    private val draftMutex = Mutex()
     private val vocabularyService = VocabularySyncService(application)
     private val exportStore = DownloadExportStore(application)
     private val preferences = AppPreferences(application)
@@ -120,7 +147,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             volumeKeysEnabled = preferences.volumeKeysEnabled,
             keyboardKeysEnabled = preferences.keyboardKeysEnabled,
             accessibilityServiceEnabled = AccessibilityStatus.isRemoteServiceEnabled(application),
-            xiaomiBandEnabled = preferences.xiaomiBandEnabled
+            xiaomiBandEnabled = preferences.xiaomiBandEnabled,
+            navigationItems = preferences.navigationItems
         )
     )
     val state: StateFlow<UiState> = mutableState.asStateFlow()
@@ -156,10 +184,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
         viewModelScope.launch {
             for (itemId in transferQueue) processTransfer(itemId)
         }
-        viewModelScope.launch {
-            runCatching { withContext(Dispatchers.IO) { clippingsService.loadCached() } }
-                .getOrNull()?.let(::applyNotesSnapshot)
-        }
+        loadDeviceData(state.value.settings, migrateLegacy = true)
         viewModelScope.launch {
             runCatching { withContext(Dispatchers.IO) { vocabularyService.loadCached() } }
                 .onSuccess { it?.let(::applyVocabularySnapshot) }
@@ -175,7 +200,184 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun updateSettings(settings: ConnectionSettings) {
-        mutableState.update { it.copy(settings = settings, isError = false) }
+        val changedDevice = state.value.settings.cacheScope() != settings.cacheScope()
+        mutableState.update {
+            if (changedDevice) it.copy(
+                settings = settings, isError = false, library = null, libraryError = null,
+                notes = emptyList(), notesLastSync = null, selectedBook = null, selectedNoteId = null,
+                notesMessage = "从 Kindle 同步摘抄", notesError = false,
+                noteDrafts = emptyMap(), noteDraftsLoading = true, noteDraftsAvailable = false,
+                noteWriteMessage = "", noteWriteError = false
+            ) else it.copy(settings = settings, isError = false)
+        }
+        if (changedDevice) loadDeviceData(settings)
+    }
+
+    private fun loadDeviceData(settings: ConnectionSettings, migrateLegacy: Boolean = false) {
+        val scope = settings.cacheScope()
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    if (migrateLegacy) clippingsService.migrateLegacyCache(settings)
+                    clippingsService.loadCached(settings)
+                }
+            }.onSuccess { snapshot ->
+                if (state.value.settings.cacheScope() == scope && snapshot != null &&
+                    (state.value.notesLastSync == null || !snapshot.syncedAt.isBefore(state.value.notesLastSync))) {
+                    applyNotesSnapshot(snapshot)
+                }
+            }.onFailure { error ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update {
+                    it.copy(notesError = true, notesMessage = error.message ?: "无法读取摘抄缓存")
+                }
+            }
+        }
+        viewModelScope.launch {
+            val snapshot = withContext(Dispatchers.IO) { libraryService.loadCached(settings) }
+            if (state.value.settings.cacheScope() == scope) mutableState.update {
+                if (snapshot != null && (it.library == null || !snapshot.syncedAt.isBefore(it.library.syncedAt))) it.copy(library = snapshot) else it
+            }
+        }
+        viewModelScope.launch {
+            runCatching { draftMutex.withLock { withContext(Dispatchers.IO) { noteDraftStore.load(scope) } } }
+                .onSuccess { drafts ->
+                    if (state.value.settings.cacheScope() == scope) mutableState.update {
+                        it.copy(noteDrafts = drafts, noteDraftsLoading = false, noteDraftsAvailable = true)
+                    }
+                }.onFailure { error ->
+                    if (state.value.settings.cacheScope() == scope) mutableState.update {
+                        it.copy(noteDraftsLoading = false, noteDraftsAvailable = false,
+                            noteWriteError = true, noteWriteMessage = error.message ?: "无法读取本地批注草稿")
+                    }
+                }
+        }
+    }
+
+    fun setNavigationItem(item: NavigationItem, visible: Boolean) {
+        val updated = NavigationOptions.update(state.value.navigationItems, item, visible)
+        preferences.navigationItems = updated
+        mutableState.update { it.copy(navigationItems = updated) }
+    }
+
+    fun reloadNoteDrafts() {
+        if (state.value.noteDraftSaving || state.value.noteWritingId != null || state.value.noteDraftsLoading) return
+        mutableState.update { it.copy(noteDraftsLoading = true, noteDraftsAvailable = false, noteWriteMessage = "", noteWriteError = false) }
+        loadDeviceData(state.value.settings)
+    }
+
+    fun syncLibrary() {
+        if (state.value.librarySyncing) return
+        val settings = state.value.settings
+        val scope = settings.cacheScope()
+        mutableState.update { it.copy(librarySyncing = true, libraryError = null) }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { libraryService.sync(settings) } }
+                .onSuccess { snapshot ->
+                    if (state.value.settings.cacheScope() == scope) mutableState.update { it.copy(library = snapshot) }
+                }.onFailure { error ->
+                    if (state.value.settings.cacheScope() == scope) mutableState.update {
+                        it.copy(libraryError = error.message ?: "书库同步失败，已保留离线书库")
+                    }
+                }
+            mutableState.update { it.copy(librarySyncing = false) }
+        }
+    }
+
+    fun saveNoteDraft(note: KindleClipping, text: String) {
+        if (state.value.noteDraftSaving || !state.value.noteDraftsAvailable) return
+        if (note.kind != ClippingKind.HIGHLIGHT) return
+        val scope = state.value.settings.cacheScope()
+        val writeInFlight = state.value.noteWritingId == note.id
+        mutableState.update { it.copy(noteDraftSaving = true, noteWriteMessage = "", noteWriteError = false) }
+        viewModelScope.launch {
+            runCatching {
+                draftMutex.withLock {
+                    withContext(Dispatchers.IO) {
+                        val drafts = noteDraftStore.load(scope).toMutableMap()
+                        val staged = stageNoteDraft(note.id, drafts[note.id], text, note.kindleNotes.isNotEmpty(), writeInFlight)
+                        if (staged == null) drafts.remove(note.id) else drafts[note.id] = staged
+                        noteDraftStore.save(scope, drafts)
+                        drafts.toMap()
+                    }
+                }
+            }.onSuccess { drafts ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update {
+                    it.copy(noteDrafts = drafts, noteWriteMessage = "批注已保存到本机", noteWriteError = false)
+                }
+            }.onFailure { error ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update {
+                    it.copy(noteWriteError = true, noteWriteMessage = error.message ?: "无法保存本地批注")
+                }
+            }
+            mutableState.update { it.copy(noteDraftSaving = false) }
+        }
+    }
+
+    fun discardNoteDraft(note: KindleClipping) {
+        if (state.value.noteDraftSaving || state.value.noteWritingId != null || !state.value.noteDraftsAvailable) return
+        val scope = state.value.settings.cacheScope()
+        mutableState.update { it.copy(noteDraftSaving = true) }
+        viewModelScope.launch {
+            runCatching {
+                draftMutex.withLock {
+                    withContext(Dispatchers.IO) {
+                        val drafts = noteDraftStore.load(scope) - note.id
+                        noteDraftStore.save(scope, drafts)
+                        drafts
+                    }
+                }
+            }.onSuccess { drafts ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update {
+                    it.copy(noteDrafts = drafts, noteWriteMessage = "已恢复同步时的 Kindle 批注", noteWriteError = false)
+                }
+            }.onFailure { error ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update {
+                    it.copy(noteWriteError = true, noteWriteMessage = error.message ?: "无法恢复原批注")
+                }
+            }
+            mutableState.update { it.copy(noteDraftSaving = false) }
+        }
+    }
+
+    fun sendNoteToKindle(note: KindleClipping) {
+        val current = state.value
+        if (current.notesSyncing || current.noteWritingId != null || current.noteDraftSaving || !current.noteDraftsAvailable) return
+        val draft = current.noteDrafts[note.id] ?: return
+        val settings = current.settings
+        val scope = settings.cacheScope()
+        mutableState.update { it.copy(noteWritingId = note.id, noteWriteMessage = "正在写入 Kindle 批注…", noteWriteError = false) }
+        viewModelScope.launch {
+            var delivered = false
+            runCatching {
+                val result = withContext(Dispatchers.IO) { writebackService.write(settings, note, draft.text) }
+                delivered = true
+                val snapshot = withContext(Dispatchers.IO) { clippingsService.importWrittenBytes(settings, result.clippingsBytes) }
+                val drafts = draftMutex.withLock {
+                    withContext(Dispatchers.IO) {
+                        val latest = noteDraftStore.load(scope).toMutableMap()
+                        latest[note.id]?.let { latest[note.id] = it.acknowledge(draft.revision) }
+                        noteDraftStore.save(scope, latest)
+                        latest.toMap()
+                    }
+                }
+                snapshot to drafts
+            }.onSuccess { (snapshot, drafts) ->
+                if (state.value.settings.cacheScope() == scope) {
+                    applyNotesSnapshot(snapshot)
+                    mutableState.update {
+                        it.copy(noteDrafts = drafts, noteWriteError = false, noteWriteMessage =
+                            if (draft.text.isBlank()) "已删除 Kindle 批注，划线保留" else "批注已写入 Kindle，本地副本已保留")
+                    }
+                }
+            }.onFailure { error ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update {
+                    it.copy(noteWriteError = true, noteWriteMessage = if (delivered)
+                        "Kindle 已完成写入，但本机保存失败。草稿仍保留，请同步摘抄后重试。"
+                    else error.message ?: "写入失败，本地草稿已保留")
+                }
+            }
+            mutableState.update { it.copy(noteWritingId = null) }
+        }
     }
 
     fun save() {
@@ -413,8 +615,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun syncNotes() {
-        if (state.value.notesSyncing) return
+        if (state.value.notesSyncing || state.value.noteWritingId != null) return
         val settings = state.value.settings
+        val scope = settings.cacheScope()
         mutableState.update {
             it.copy(
                 notesSyncing = true,
@@ -430,13 +633,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             runCatching {
                 withContext(Dispatchers.IO) {
                     clippingsService.sync(settings) { downloaded, total ->
-                        mutableState.update {
+                        if (state.value.settings.cacheScope() == scope) mutableState.update {
                             it.copy(notesDownloaded = downloaded, notesTotal = total)
                         }
                     }
                 }
             }.fold(
                 onSuccess = { snapshot ->
+                    if (state.value.settings.cacheScope() != scope) {
+                        mutableState.update { it.copy(notesSyncing = false) }
+                        return@fold
+                    }
                     applyNotesSnapshot(snapshot)
                     mutableState.update {
                         it.copy(
@@ -451,6 +658,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                     }
                 },
                 onFailure = { error ->
+                    if (state.value.settings.cacheScope() != scope) {
+                        mutableState.update { it.copy(notesSyncing = false) }
+                        return@fold
+                    }
                     val diagnostic = (error as? NotesSyncException)?.diagnostic ?: NotesDiagnostics.unknown()
                     Log.w("KPilotNotes", "sync_failed code=${diagnostic.code} stage=${diagnostic.stage}")
                     mutableState.update {
@@ -476,7 +687,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun selectNote(id: String?) {
-        mutableState.update { it.copy(selectedNoteId = id) }
+        mutableState.update { it.copy(selectedNoteId = id, noteWriteMessage = "", noteWriteError = false) }
     }
 
     fun setNotesSortOrder(order: NotesSortOrder) {

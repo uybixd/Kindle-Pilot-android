@@ -3,6 +3,7 @@ package com.hongxiang.kpilot.notes
 import android.content.Context
 import java.io.IOException
 import com.hongxiang.kpilot.data.ConnectionSettings
+import com.hongxiang.kpilot.data.cacheScope
 import com.hongxiang.kpilot.ssh.KindleSshSessionFactory
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSchException
@@ -12,13 +13,26 @@ import java.io.OutputStream
 import java.time.Instant
 
 class ClippingsSyncService(context: Context) {
-    private val cacheFile = context.noBackupFilesDir.resolve("notes/My Clippings.txt")
+    private val cacheDirectory = context.noBackupFilesDir.resolve("notes")
+    private fun cacheFile(settings: ConnectionSettings) = cacheDirectory.resolve("${settings.cacheScope()}/My Clippings.txt")
+
+    /** Assign the pre-device-namespace cache to the previously saved connection once. */
+    fun migrateLegacyCache(settings: ConnectionSettings) {
+        if (settings.host.isBlank()) return
+        val legacy = cacheDirectory.resolve("My Clippings.txt")
+        val destination = cacheFile(settings)
+        if (!legacy.isFile || destination.exists()) return
+        check(destination.parentFile?.let { it.isDirectory || it.mkdirs() } == true && legacy.renameTo(destination)) {
+            "无法迁移原有摘抄缓存，原文件仍然保留"
+        }
+    }
 
     fun sync(
         settings: ConnectionSettings,
         onProgress: (downloaded: Long, total: Long?) -> Unit
     ): ClippingsSnapshot = try {
         withSession(settings) { session ->
+            val cacheFile = cacheFile(settings)
             // Deliberately mirrors the proven Mac protocol: one quoted cat stream.
             // Do not require wc/stat: Kindle BusyBox variants are not consistent.
             try {
@@ -43,7 +57,7 @@ class ClippingsSyncService(context: Context) {
                     error
                 )
             }
-            parseCache(Instant.now())
+            parseCache(cacheFile, Instant.now())
         }
     } catch (error: NotesSyncException) {
         throw error
@@ -53,11 +67,20 @@ class ClippingsSyncService(context: Context) {
         throw NotesSyncException(NotesDiagnostics.unknown(), error)
     }
 
-    fun loadCached(): ClippingsSnapshot? = if (cacheFile.isFile) {
-        parseCache(Instant.ofEpochMilli(cacheFile.lastModified()))
-    } else null
+    fun loadCached(settings: ConnectionSettings): ClippingsSnapshot? {
+        val file = cacheFile(settings)
+        return if (file.isFile) parseCache(file, Instant.ofEpochMilli(file.lastModified())) else null
+    }
 
-    private fun parseCache(syncedAt: Instant): ClippingsSnapshot {
+    fun importWrittenBytes(settings: ConnectionSettings, bytes: ByteArray): ClippingsSnapshot {
+        val file = cacheFile(settings)
+        AtomicCache.writeValidated(file, { it.write(bytes) }, { temporary ->
+            check(ClippingsValidation.inspect(temporary.readBytes()).second == null) { "写回后的摘抄缓存格式无效" }
+        })
+        return parseCache(file, Instant.now())
+    }
+
+    private fun parseCache(cacheFile: java.io.File, syncedAt: Instant): ClippingsSnapshot {
         val bytes = cacheFile.readBytes()
         val result = ClippingsParser.parseDetailed(ClippingsTextDecoder.decode(bytes))
         return ClippingsSnapshot(
