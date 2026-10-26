@@ -31,6 +31,8 @@ import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,140 +67,52 @@ import java.io.File
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** Stateless data boundary: navigation within a book and presentation preferences stay in Compose. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
-    snapshot: LibrarySnapshot?,
-    clippings: List<KindleClipping>,
-    syncing: Boolean,
-    errorMessage: String?,
-    onRefresh: () -> Unit,
-    onSendBooks: () -> Unit,
-    onOpenClipping: (KindleClipping) -> Unit,
-    modifier: Modifier = Modifier
+    snapshot: LibrarySnapshot?, clippings: List<KindleClipping>, syncing: Boolean,
+    errorMessage: String?, onRefresh: () -> Unit, onRefreshClippings: () -> Unit,
+    onOpenClipping: (KindleClipping) -> Unit, modifier: Modifier = Modifier
 ) {
-    var query by rememberSaveable(snapshot?.sourceKey) { mutableStateOf("") }
-    var grid by rememberSaveable { mutableStateOf(true) }
     var selectedPath by rememberSaveable(snapshot?.sourceKey) { mutableStateOf<String?>(null) }
     val books = snapshot?.books.orEmpty()
     val selected = books.firstOrNull { it.remotePath == selectedPath }
-    val clippingIndex = remember(clippings) { LibraryClippingsIndex(clippings) }
-    val notesByPath = remember(books, clippingIndex) { books.associate { it.remotePath to clippingIndex.clippings(it) } }
-    val visible = remember(books, query) {
-        val needle = LibraryRules.normalizeTitle(query)
-        books.filter { needle.isBlank() || LibraryRules.normalizeTitle("${it.title} ${it.author.orEmpty()} ${it.fileName}").contains(needle) }
-    }
-
-    BackHandler(enabled = selected != null) { selectedPath = null }
-    Column(modifier.fillMaxSize()) {
-        if (syncing) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (selected != null) {
-                    IconButton(onClick = { selectedPath = null }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, localizedText("返回书库"))
-                    }
-                    Text(selected.title, modifier = Modifier.weight(1f), maxLines = 2,
-                        overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                } else {
-                    Text("${books.size} 本书", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                    IconButton(onClick = { grid = !grid }) {
-                        Icon(if (grid) Icons.AutoMirrored.Filled.ViewList else Icons.Filled.GridView,
-                            localizedText(if (grid) "切换为列表" else "切换为网格"))
-                    }
-                }
-                IconButton(onClick = onRefresh, enabled = !syncing) {
-                    Icon(Icons.Filled.Refresh, localizedText("刷新书库"))
-                }
-                IconButton(onClick = onSendBooks) {
-                    Icon(Icons.AutoMirrored.Filled.Send, localizedText("传书"))
-                }
+    val index = remember(clippings) { LibraryClippingsIndex(clippings) }
+    val notesByPath = remember(books,index) { books.associate { it.remotePath to index.clippings(it) } }
+    BackHandler(selected != null) { selectedPath = null }
+    PullToRefreshBox(isRefreshing = syncing, onRefresh = if(selected != null) onRefreshClippings else onRefresh, modifier = modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            if(selected != null) Row(Modifier.padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                IconButton(onClick={selectedPath=null}) { Icon(Icons.AutoMirrored.Filled.ArrowBack,localizedText("返回书库")) }
+                Text(selected.title,style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
             }
-            if (errorMessage != null) {
-                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(errorMessage, color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall)
-                        if (snapshot != null) Text("手机中上一次成功同步的书库仍然保留。", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-            if (selected == null && books.isNotEmpty()) {
-                OutlinedTextField(value = query, onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    placeholder = { Text("搜索书名、作者或文件名") },
-                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                    shape = RoundedCornerShape(16.dp))
-                snapshot?.let {
-                    val timestamp = remember(it.syncedAt) {
-                        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(it.syncedAt)
-                    }
-                    Text("上次同步：$timestamp", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-        when {
-            selected != null -> {
+            errorMessage?.let { Text(it,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(16.dp),style=MaterialTheme.typography.bodySmall) }
+            if(selected != null) {
                 val notes = notesByPath[selected.remotePath].orEmpty()
-                if (notes.isEmpty()) {
-                    LibraryEmpty("这本书还没有摘抄", "请先从“摘抄”页同步 Kindle 笔记，再回到书库查看。")
-                } else {
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        items(notes, key = { it.id }) { clipping ->
-                            ListItem(
-                                headlineContent = { Text(clipping.text.ifBlank { clipping.metadata }, maxLines = 4,
-                                    overflow = TextOverflow.Ellipsis) },
-                                supportingContent = {
-                                    Column {
-                                        Text(clipping.referenceText, style = MaterialTheme.typography.labelSmall)
-                                        clipping.kindleNotes.lastOrNull()?.let { Text(it.text, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                                    }
-                                },
-                                modifier = Modifier.clickable { onOpenClipping(clipping) }.padding(horizontal = 8.dp)
-                            )
-                        }
+                LazyColumn(Modifier.fillMaxSize()) {
+                    if(notes.isEmpty()) item { LibraryEmpty("这本书还没有摘抄", "") }
+                    items(notes,key={it.id}) { clipping ->
+                        ListItem(headlineContent={Text(clipping.text.ifBlank{clipping.metadata},maxLines=4,overflow=TextOverflow.Ellipsis)},
+                            supportingContent={Text(clipping.referenceText,style=MaterialTheme.typography.labelSmall)},
+                            modifier=Modifier.clickable{onOpenClipping(clipping)})
                     }
                 }
-            }
-            books.isEmpty() -> LibraryEmpty(
-                if (snapshot == null) "尚未读取 Kindle 书库" else "Kindle 书库为空",
-                "连接 Kindle 后刷新书库，也可以无线传书。",
-                action = {
-                    Button(onClick = onRefresh, enabled = !syncing) { Text("刷新书库") }
-                    TextButton(onClick = onSendBooks) { Text("选择书籍传送") }
-                }
-            )
-            visible.isEmpty() -> LibraryEmpty("没有找到书籍", "试试其他书名、作者或文件名")
-            grid -> LazyVerticalGrid(columns = GridCells.Adaptive(108.dp),
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                items(visible, key = { it.remotePath }) { book ->
-                    Column(Modifier.clickable { selectedPath = book.remotePath }.padding(bottom = 8.dp)) {
-                        BookCover(book, Modifier.fillMaxWidth().aspectRatio(0.68f))
-                        Spacer(Modifier.height(8.dp))
-                        Text(book.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text("${notesByPath[book.remotePath].orEmpty().size} 条摘抄", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        BookProgress(book)
-                    }
-                }
-            }
-            else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(visible, key = { it.remotePath }) { book ->
-                    ListItem(
-                        headlineContent = { Text(book.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                        supportingContent = {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                book.author?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                                Text("${notesByPath[book.remotePath].orEmpty().size} 条摘抄 · ${book.format}")
+            } else if(books.isEmpty()) {
+                LazyColumn(Modifier.fillMaxSize()) { item { LibraryEmpty("尚未读取 Kindle 书库", "") } }
+            } else LazyVerticalGrid(columns=GridCells.Fixed(3),modifier=Modifier.fillMaxSize(),
+                contentPadding=androidx.compose.foundation.layout.PaddingValues(start=16.dp,end=16.dp,top=8.dp,bottom=28.dp),
+                horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
+                items(books,key={it.remotePath}) { book ->
+                    Column(Modifier.clickable{selectedPath=book.remotePath},verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                        Box {
+                            BookCover(book,Modifier.fillMaxWidth().aspectRatio(.68f))
+                            if((book.percentFinished ?: 0.0)>0) Surface(color=MaterialTheme.colorScheme.surface.copy(alpha=.9f),modifier=Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
                                 BookProgress(book)
                             }
-                        },
-                        leadingContent = { BookCover(book, Modifier.width(54.dp).height(80.dp)) },
-                        modifier = Modifier.clickable { selectedPath = book.remotePath }.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                        }
+                        Text(book.title,style=MaterialTheme.typography.bodySmall,fontWeight=FontWeight.Medium,maxLines=2,overflow=TextOverflow.Ellipsis)
+                        Text("${notesByPath[book.remotePath].orEmpty().size} 条摘抄",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -211,7 +125,7 @@ private fun LibraryEmpty(title: String, description: String, action: (@Composabl
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(Icons.AutoMirrored.Filled.MenuBook, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
             Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if(description.isNotBlank()) Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             action?.invoke()
         }
     }

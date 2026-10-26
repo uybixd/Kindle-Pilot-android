@@ -32,11 +32,11 @@ class AppTextTest {
     }
 
     @Test
-    fun libraryReviewAndWritebackLabelsAreLocalized() {
+    fun librarySettingsAndWritebackLabelsAreLocalized() {
         assertEquals("Library", localizeAppText("书库", "en"))
-        assertEquals("3 reviewed today", localizeAppText("今天已复习 3 条", "en"))
+        assertEquals("Local data", localizeAppText("本地数据", "en"))
         assertEquals("2 clippings · AZW3", localizeAppText("2 条摘抄 · AZW3", "en"))
         assertEquals("Send to Kindle", localizeAppText("发送到 Kindle", "en"))
-        assertEquals("Batch 2 / 9", localizeAppText("本组 2 / 9", "en"))
+        assertEquals("Show remote", localizeAppText("显示遥控器", "en"))
     }
 }

@@ -84,11 +84,12 @@ object VocabularyRowMapper {
 }
 
 enum class VocabularyExportFormat(val extension: String, val mimeType: String) {
-    TEXT("txt", "text/plain"), CSV("csv", "text/csv")
+    MARKDOWN("md", "text/markdown"), TEXT("txt", "text/plain"), CSV("csv", "text/csv")
 }
 
 object VocabularyExporter {
     fun export(words: List<VocabularyWord>, format: VocabularyExportFormat): String = when (format) {
+        VocabularyExportFormat.MARKDOWN -> words.joinToString("\n\n") { word -> "## ${word.displayWord}\n\n" + word.lookups.joinToString("\n\n") { "> ${it.usage}\n\n${it.bookDisplay}" } }
         VocabularyExportFormat.TEXT -> words.joinToString("\n\n") { word ->
             buildString {
                 append(word.displayWord).append('\n').append("=".repeat(word.displayWord.length.coerceAtLeast(1)))

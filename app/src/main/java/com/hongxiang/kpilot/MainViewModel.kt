@@ -9,6 +9,9 @@ import androidx.lifecycle.viewModelScope
 import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.data.AppPreferences
 import com.hongxiang.kpilot.data.SecureSettingsStore
+import com.hongxiang.kpilot.data.KindleProfiles
+import com.hongxiang.kpilot.data.KindleProfile
+import com.hongxiang.kpilot.data.LocalLibraryData
 import com.hongxiang.kpilot.data.NavigationItem
 import com.hongxiang.kpilot.data.NavigationOptions
 import com.hongxiang.kpilot.data.cacheScope
@@ -66,6 +69,16 @@ import java.time.Instant
 
 data class UiState(
     val settings: ConnectionSettings = ConnectionSettings(),
+    val profiles: List<KindleProfile> = emptyList(),
+    val activeProfileId: String = "",
+    val connected: Boolean = false,
+    val connectionMessage: String = "未连接",
+    val connectionError: Boolean = false,
+    val connectionBusy: Boolean = false,
+    val localDataBusy: Boolean = false,
+    val localDataMessage: String = "",
+    val localDataError: Boolean = false,
+    val notesBookPickerVisible: Boolean = false,
     val status: String = "请填写 Kindle 连接信息",
     val isError: Boolean = false,
     val busy: Boolean = false,
@@ -126,6 +139,8 @@ enum class NotesSortOrder { LOCATION, ADDED_AT }
 
 class MainViewModel(application: Application) : AndroidViewModel(application), CommandSink {
     private val store = SecureSettingsStore(application)
+    private val profiles = KindleProfiles(application)
+    private val localData = LocalLibraryData(application)
     private val ssh = KindleSshClient()
     private val transferService = KindleTransferService(application.contentResolver)
     private val clippingsService = ClippingsSyncService(application)
@@ -133,6 +148,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     private val noteDraftStore = NoteDraftStore(application)
     private val writebackService = KindleNoteWritebackService(application)
     private val draftMutex = Mutex()
+    private var pendingDraftSaves = 0
     private val vocabularyService = VocabularySyncService(application)
     private val exportStore = DownloadExportStore(application)
     private val preferences = AppPreferences(application)
@@ -142,7 +158,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     private var collisionDecision: CompletableDeferred<CollisionDecision>? = null
     private val mutableState = MutableStateFlow(
         UiState(
-            settings = store.load() ?: ConnectionSettings(),
+            settings = store.load() ?: profiles.settings(),
+            profiles = profiles.all(), activeProfileId = profiles.activeId,
             remoteControlEnabled = preferences.remoteControlEnabled,
             volumeKeysEnabled = preferences.volumeKeysEnabled,
             keyboardKeysEnabled = preferences.keyboardKeysEnabled,
@@ -154,6 +171,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     val state: StateFlow<UiState> = mutableState.asStateFlow()
 
     init {
+        setRemoteControlEnabled(false)
+        setKeyboardKeysEnabled(false)
         viewModelScope.launch(Dispatchers.IO) { exportStore.clearLegacyPrivateExports() }
         viewModelScope.launch {
             remoteDispatcher.state.collect { dispatch ->
@@ -185,27 +204,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             for (itemId in transferQueue) processTransfer(itemId)
         }
         loadDeviceData(state.value.settings, migrateLegacy = true)
-        viewModelScope.launch {
-            runCatching { withContext(Dispatchers.IO) { vocabularyService.loadCached() } }
-                .onSuccess { it?.let(::applyVocabularySnapshot) }
-                .onFailure { error ->
-                    mutableState.update {
-                        it.copy(
-                            vocabularyMessage = error.message ?: "Cached vocabulary is not compatible",
-                            vocabularyError = true
-                        )
-                    }
-                }
-        }
     }
 
     fun updateSettings(settings: ConnectionSettings) {
         val changedDevice = state.value.settings.cacheScope() != settings.cacheScope()
         mutableState.update {
             if (changedDevice) it.copy(
-                settings = settings, isError = false, library = null, libraryError = null,
+                settings = settings, connected = false, connectionMessage = "未连接", connectionError = false, isError = false, library = null, libraryError = null,
                 notes = emptyList(), notesLastSync = null, selectedBook = null, selectedNoteId = null,
                 notesMessage = "从 Kindle 同步摘抄", notesError = false,
+                vocabularyWords = emptyList(), vocabularyLastSync = null, selectedVocabularyKey = null, vocabularyError = false,
                 noteDrafts = emptyMap(), noteDraftsLoading = true, noteDraftsAvailable = false,
                 noteWriteMessage = "", noteWriteError = false
             ) else it.copy(settings = settings, isError = false)
@@ -215,6 +223,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
 
     private fun loadDeviceData(settings: ConnectionSettings, migrateLegacy: Boolean = false) {
         val scope = settings.cacheScope()
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) {
+                if (migrateLegacy) vocabularyService.migrateLegacyCache(settings)
+                vocabularyService.loadCached(settings)
+            } }.onSuccess { snapshot ->
+                if (state.value.settings.cacheScope() == scope && snapshot != null &&
+                    (state.value.vocabularyLastSync == null || !snapshot.syncedAt.isBefore(state.value.vocabularyLastSync))) applyVocabularySnapshot(snapshot)
+            }.onFailure { error ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update { it.copy(vocabularyError = true, vocabularyMessage = error.message ?: "无法读取生词缓存") }
+            }
+        }
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
@@ -266,7 +285,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun syncLibrary() {
-        if (state.value.librarySyncing) return
+        if (state.value.librarySyncing || state.value.localDataBusy) return
         val settings = state.value.settings
         val scope = settings.cacheScope()
         mutableState.update { it.copy(librarySyncing = true, libraryError = null) }
@@ -284,10 +303,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun saveNoteDraft(note: KindleClipping, text: String) {
-        if (state.value.noteDraftSaving || !state.value.noteDraftsAvailable) return
+        if (!state.value.noteDraftsAvailable || state.value.localDataBusy) return
         if (note.kind != ClippingKind.HIGHLIGHT) return
         val scope = state.value.settings.cacheScope()
         val writeInFlight = state.value.noteWritingId == note.id
+        pendingDraftSaves++
         mutableState.update { it.copy(noteDraftSaving = true, noteWriteMessage = "", noteWriteError = false) }
         viewModelScope.launch {
             runCatching {
@@ -302,14 +322,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                 }
             }.onSuccess { drafts ->
                 if (state.value.settings.cacheScope() == scope) mutableState.update {
-                    it.copy(noteDrafts = drafts, noteWriteMessage = "批注已保存到本机", noteWriteError = false)
+                    it.copy(noteDrafts = drafts, noteWriteMessage = "", noteWriteError = false)
                 }
             }.onFailure { error ->
                 if (state.value.settings.cacheScope() == scope) mutableState.update {
                     it.copy(noteWriteError = true, noteWriteMessage = error.message ?: "无法保存本地批注")
                 }
             }
-            mutableState.update { it.copy(noteDraftSaving = false) }
+            pendingDraftSaves--
+            mutableState.update { it.copy(noteDraftSaving = pendingDraftSaves > 0) }
         }
     }
 
@@ -381,7 +402,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun save() {
-        runCatching { store.save(state.value.settings) }.fold(
+        runCatching { store.save(state.value.settings); profiles.saveActive(state.value.settings) }.fold(
             onSuccess = {
                 remoteDispatcher.connectionSettingsChanged()
                 mutableState.update { it.copy(status = "设置已安全保存", isError = false) }
@@ -392,18 +413,95 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
         )
     }
 
-    fun testConnection() {
-        val settings = state.value.settings
-        mutableState.update { it.copy(busy = true, status = "正在测试 SSH 连接…", isError = false) }
+    fun testConnection() = connectKindle()
+
+    fun connectKindle() {
+        val current = state.value
+        if (current.connectionBusy || current.localDataBusy) return
+        val settings = current.settings
+        val scope = settings.cacheScope()
+        mutableState.update { it.copy(connectionBusy = true, connectionMessage = "正在连接 Kindle…", connectionError = false, status = "正在连接 Kindle…", isError = false) }
         viewModelScope.launch {
-            runCatching { withContext(Dispatchers.IO) { ssh.test(settings) } }.fold(
-                onSuccess = { message -> mutableState.update { it.copy(busy = false, status = message) } },
-                onFailure = { error ->
-                    mutableState.update {
-                        it.copy(busy = false, status = error.message ?: "连接失败", isError = true)
-                    }
+            runCatching { withContext(Dispatchers.IO) {
+                store.save(settings); profiles.saveActive(settings)
+                ssh.test(settings)
+                val event = settings.eventDevice.ifBlank { runCatching { ssh.detectTouchDevice(settings) }.getOrDefault("") }
+                settings.copy(eventDevice = event).also { store.save(it); profiles.saveActive(it) }
+            } }.onSuccess { resolved ->
+                if (state.value.settings.cacheScope() == scope) {
+                    mutableState.update { it.copy(settings = resolved, connected = true, connectionMessage = "已连接", connectionError = false, status = "已连接", isError = false) }
+                    remoteDispatcher.connectionSettingsChanged()
+                    setRemoteControlEnabled(true)
+                    checkFlipCommands()
                 }
-            )
+            }.onFailure { error ->
+                if (state.value.settings.cacheScope() == scope) mutableState.update { it.copy(connected = false, connectionMessage = error.message ?: "连接失败", connectionError = true, status = error.message ?: "连接失败", isError = true) }
+            }
+            mutableState.update { it.copy(connectionBusy = false) }
+        }
+    }
+
+    fun refreshLibraryFromKindle() { syncNotes(); syncVocabulary(); syncLibrary() }
+    fun refreshRemoteControl() { refreshXiaomiBand(); refreshRemoteRuntimeStatus(); connectKindle() }
+    fun showNotesBookPicker() { mutableState.update { it.copy(notesBookPickerVisible = true) } }
+    fun hideNotesBookPicker() { mutableState.update { it.copy(notesBookPickerVisible = false) } }
+
+    fun renameProfile(name: String) {
+        profiles.rename(name)
+        mutableState.update { it.copy(profiles = profiles.all()) }
+    }
+    fun selectProfile(id: String) {
+        if (state.value.connectionBusy || state.value.localDataBusy) return
+        profiles.select(id)
+        activateProfile()
+    }
+    fun addProfile() { if (!state.value.connectionBusy) { profiles.add(); activateProfile() } }
+    fun removeProfile() { if (!state.value.connectionBusy) { profiles.remove(); activateProfile() } }
+    private fun activateProfile() {
+        setRemoteControlEnabled(false)
+        val settings = profiles.settings()
+        if (settings.host.isNotBlank()) store.save(settings) else store.clear()
+        updateSettings(settings)
+        mutableState.update { it.copy(profiles = profiles.all(), activeProfileId = profiles.activeId, connected = false, connectionMessage = "未连接", connectionError = false, status = "未连接", isError = false) }
+        remoteDispatcher.connectionSettingsChanged()
+    }
+    fun forgetHostKeys() {
+        runCatching { com.hongxiang.kpilot.ssh.KindleSshSessionFactory.knownHostsFile?.let { if (it.exists()) check(it.delete()) } }
+            .onSuccess { mutableState.update { it.copy(connectionMessage = "已清除", connectionError = false) } }
+            .onFailure { error -> mutableState.update { it.copy(status = error.message ?: "操作失败", isError = true) } }
+    }
+    fun importLocalFile(uri: Uri, vocabulary: Boolean) = performLocalAction {
+        val settings = state.value.settings
+        val bytes = localData.readImport(uri)
+        if (vocabulary) {
+            val snapshot = vocabularyService.importBytes(settings,bytes)
+            if (state.value.settings.cacheScope() == settings.cacheScope()) applyVocabularySnapshot(snapshot)
+        } else {
+            val snapshot = clippingsService.importWrittenBytes(settings,bytes)
+            if (state.value.settings.cacheScope() == settings.cacheScope()) applyNotesSnapshot(snapshot)
+        }
+        "已导入"
+    }
+    fun exportLocalBackup(uri: Uri) = performLocalAction { localData.exportBackup(uri); "已导出" }
+    fun clearLocalData() {
+        if (state.value.notesSyncing || state.value.vocabularySyncing || state.value.librarySyncing || state.value.noteWritingId != null || state.value.noteDraftSaving || state.value.localDataBusy || state.value.connectionBusy || state.value.busy) return
+        setRemoteControlEnabled(false); setXiaomiBandEnabled(false)
+        performLocalAction {
+            localData.clear(); store.clear(); profiles.reset()
+            preferences.navigationItems = NavigationOptions.defaults
+            mutableState.value = UiState(profiles = profiles.all(), activeProfileId = profiles.activeId,
+                navigationItems = NavigationOptions.defaults, noteDraftsLoading = false, noteDraftsAvailable = true)
+            "已清除"
+        }
+    }
+    private fun performLocalAction(action: () -> String) {
+        if (state.value.localDataBusy || state.value.noteDraftSaving || state.value.notesSyncing || state.value.vocabularySyncing || state.value.librarySyncing || state.value.noteWritingId != null || state.value.connectionBusy) return
+        mutableState.update { it.copy(localDataBusy = true, localDataMessage = "", localDataError = false) }
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { action() } }
+                .onSuccess { message -> mutableState.update { it.copy(localDataMessage = message, localDataError = false) } }
+                .onFailure { error -> mutableState.update { it.copy(localDataMessage = error.message ?: "操作失败", localDataError = true) } }
+            mutableState.update { it.copy(localDataBusy = false) }
         }
     }
 
@@ -615,7 +713,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun syncNotes() {
-        if (state.value.notesSyncing || state.value.noteWritingId != null) return
+        if (state.value.notesSyncing || state.value.noteWritingId != null || state.value.localDataBusy) return
         val settings = state.value.settings
         val scope = settings.cacheScope()
         mutableState.update {
@@ -747,8 +845,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun syncVocabulary() {
-        if (state.value.vocabularySyncing) return
+        if (state.value.vocabularySyncing || state.value.localDataBusy) return
         val settings = state.value.settings
+        val scope = settings.cacheScope()
         mutableState.update {
             it.copy(
                 vocabularySyncing = true,
@@ -763,13 +862,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             runCatching {
                 withContext(Dispatchers.IO) {
                     vocabularyService.sync(settings) { downloaded, total ->
-                        mutableState.update {
+                        if (state.value.settings.cacheScope() == scope) mutableState.update {
                             it.copy(vocabularyDownloaded = downloaded, vocabularyTotal = total)
                         }
                     }
                 }
             }.fold(
                 onSuccess = { snapshot ->
+                    if (state.value.settings.cacheScope() != scope) { mutableState.update { it.copy(vocabularySyncing = false) }; return@fold }
                     applyVocabularySnapshot(snapshot)
                     mutableState.update {
                         it.copy(
@@ -781,6 +881,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                     }
                 },
                 onFailure = { error ->
+                    if (state.value.settings.cacheScope() != scope) { mutableState.update { it.copy(vocabularySyncing = false) }; return@fold }
                     val diagnostic = (error as? VocabularySyncException)?.diagnostic
                     mutableState.update {
                         it.copy(

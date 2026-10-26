@@ -7,8 +7,11 @@ import com.jcraft.jsch.Session
 
 /** Creates consistently configured SSH sessions for every Kindle feature. */
 object KindleSshSessionFactory {
+    @Volatile var knownHostsFile: java.io.File? = null
     fun create(settings: ConnectionSettings): Session =
-        JSch().getSession(settings.username, settings.host, settings.port).also { session ->
+        JSch().apply { knownHostsFile?.let { file ->
+            file.parentFile?.mkdirs(); if (!file.exists()) file.createNewFile(); setKnownHosts(file.absolutePath)
+        } }.getSession(settings.username, settings.host, settings.port).also { session ->
             session.setPassword(settings.password)
             configure(session, Build.VERSION.SDK_INT)
         }

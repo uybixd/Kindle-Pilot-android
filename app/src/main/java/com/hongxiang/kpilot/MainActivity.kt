@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -118,6 +119,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import com.hongxiang.kpilot.ui.settings.SettingsScreen as AlignedSettingsScreen
+import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -127,7 +133,6 @@ import com.hongxiang.kpilot.model.KindleCommand
 import com.hongxiang.kpilot.data.NavigationItem
 import com.hongxiang.kpilot.data.NavigationOptions
 import com.hongxiang.kpilot.library.LibraryScreen
-import com.hongxiang.kpilot.review.ReviewScreen
 import com.hongxiang.kpilot.ui.NoteWritebackSection
 import com.hongxiang.kpilot.i18n.AppText as Text
 import com.hongxiang.kpilot.i18n.localizeAppText
@@ -164,12 +169,11 @@ internal fun commandForVolumeKey(keyCode: Int): KindleCommand? = when (keyCode) 
 }
 
 private enum class Destination(val label: String, val icon: ImageVector) {
-    LIBRARY("书库", Icons.AutoMirrored.Filled.LibraryBooks),
     NOTES("摘抄", Icons.AutoMirrored.Filled.Notes),
-    REVIEW("复习", Icons.Filled.History),
-    VOCABULARY("生词", Icons.Filled.Spellcheck),
+    VOCABULARY("生词本", Icons.Filled.Spellcheck),
     REMOTE("遥控", Icons.Filled.SettingsRemote),
-    SEND("传书", Icons.AutoMirrored.Filled.Send),
+    LIBRARY("书架", Icons.AutoMirrored.Filled.LibraryBooks),
+    SEND("传书状态", Icons.AutoMirrored.Filled.Send),
     SETTINGS("设置", Icons.Filled.Settings);
 
     val navigationItem: NavigationItem get() = NavigationItem.valueOf(name)
@@ -226,9 +230,8 @@ private fun KPilotApp(viewModel: MainViewModel) {
     var transientDestination by rememberSaveable { mutableStateOf(false) }
     var noteReturnDestination by rememberSaveable { mutableStateOf(Destination.NOTES) }
     val screenStateHolder = rememberSaveableStateHolder()
-    var notesSearchVisible by rememberSaveable { mutableStateOf(false) }
-    var vocabularySearchVisible by rememberSaveable { mutableStateOf(false) }
     var exportMenuExpanded by remember { mutableStateOf(false) }
+    var notesSortMenu by remember { mutableStateOf(false) }
     var pendingNotesExport by remember { mutableStateOf<ClippingsExportFormat?>(null) }
     var pendingVocabularyExport by remember { mutableStateOf<VocabularyExportFormat?>(null) }
     val coroutineScope = rememberCoroutineScope()
@@ -303,6 +306,10 @@ private fun KPilotApp(viewModel: MainViewModel) {
         }
     }
 
+    val bookImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) { viewModel.addTransferUris(uris); viewModel.sendReadyTransfers(); navigateTo(Destination.SEND) }
+    }
+
     BackHandler(showingNoteDetail || showingSecondaryScreen) {
         if (showingNoteDetail) closeNote() else {
             destination = secondaryParent.takeIf { it.navigationItem in state.navigationItems } ?: Destination.NOTES
@@ -326,12 +333,13 @@ private fun KPilotApp(viewModel: MainViewModel) {
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
+            if (destination != Destination.SETTINGS) TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 title = {
-                    Text(if (showingNoteDetail) "摘抄详情" else destination.label, fontWeight = FontWeight.SemiBold)
+                    Text(if (showingNoteDetail) "摘抄详情" else if (destination == Destination.NOTES) state.selectedBook ?: destination.label else destination.label, fontWeight = FontWeight.SemiBold)
                 },
                 navigationIcon = {
                     if (showingNoteDetail || showingSecondaryScreen) {
@@ -347,56 +355,31 @@ private fun KPilotApp(viewModel: MainViewModel) {
                 },
                 actions = {
                     when {
+                        destination == Destination.LIBRARY -> {
+                            if (state.transfers.isNotEmpty()) IconButton(onClick = { navigateTo(Destination.SEND) }) { Icon(Icons.AutoMirrored.Filled.ListAlt, localizedText("传书状态")) }
+                            IconButton(onClick = { bookImporter.launch(SupportedTransferTypes.pickerMimeTypes) }) { Icon(Icons.Filled.Add, localizedText("传书")) }
+                        }
                         destination == Destination.NOTES && !showingNoteDetail -> {
-                            TactileIconButton(onClick = {
-                                notesSearchVisible = !notesSearchVisible
-                                if (!notesSearchVisible) viewModel.updateNotesQuery("")
-                            }) {
-                                Icon(if (notesSearchVisible) Icons.Filled.Close else Icons.Filled.Search, contentDescription = localizedText("搜索摘抄"))
+                            TactileIconButton(onClick = { viewModel.showNotesBookPicker() }) {
+                                Icon(Icons.Filled.FilterList, contentDescription = localizedText("筛选"))
                             }
-                            SyncAction(state.notesSyncing, viewModel::syncNotes, "同步摘抄")
-                            Box {
-                                TactileIconButton(onClick = { exportMenuExpanded = true }) {
-                                    Icon(Icons.Filled.MoreVert, contentDescription = localizedText("导出摘抄"))
-                                }
-                                DropdownMenu(expanded = exportMenuExpanded, onDismissRequest = { exportMenuExpanded = false }) {
-                                    ClippingsExportFormat.entries.forEach { format ->
-                                        DropdownMenuItem(
-                                            text = { Text("导出 ${format.menuLabel()}") },
-                                            enabled = viewModel.visibleNotes().isNotEmpty(),
-                                            onClick = {
-                                                exportMenuExpanded = false
-                                                exportNotes(format)
-                                            }
-                                        )
+                            if (state.selectedBook != null) Box {
+                                TactileIconButton(onClick = { notesSortMenu = true }) { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = localizedText("排序")) }
+                                DropdownMenu(expanded = notesSortMenu, onDismissRequest = { notesSortMenu = false }) {
+                                    NotesSortOrder.entries.forEach { order ->
+                                        DropdownMenuItem(text = { Text(if(order == NotesSortOrder.LOCATION) "按位置" else "按时间") },
+                                            trailingIcon = { if(state.notesSortOrder == order) Icon(Icons.Filled.CheckCircle,null) },
+                                            onClick = { viewModel.setNotesSortOrder(order); notesSortMenu = false })
                                     }
                                 }
+                            }
+                            TactileIconButton(onClick = { exportNotes(ClippingsExportFormat.MARKDOWN) }) {
+                                Icon(Icons.Filled.IosShare, contentDescription = localizedText("导出"))
                             }
                         }
                         destination == Destination.VOCABULARY -> {
-                            TactileIconButton(onClick = {
-                                vocabularySearchVisible = !vocabularySearchVisible
-                                if (!vocabularySearchVisible) viewModel.updateVocabularyQuery("")
-                            }) {
-                                Icon(if (vocabularySearchVisible) Icons.Filled.Close else Icons.Filled.Search, contentDescription = localizedText("搜索生词"))
-                            }
-                            SyncAction(state.vocabularySyncing, viewModel::syncVocabulary, "同步生词")
-                            Box {
-                                TactileIconButton(onClick = { exportMenuExpanded = true }) {
-                                    Icon(Icons.Filled.MoreVert, contentDescription = localizedText("导出生词"))
-                                }
-                                DropdownMenu(expanded = exportMenuExpanded, onDismissRequest = { exportMenuExpanded = false }) {
-                                    VocabularyExportFormat.entries.forEach { format ->
-                                        DropdownMenuItem(
-                                            text = { Text("导出 ${format.name}") },
-                                            enabled = viewModel.visibleVocabularyWords().isNotEmpty(),
-                                            onClick = {
-                                                exportMenuExpanded = false
-                                                exportVocabulary(format)
-                                            }
-                                        )
-                                    }
-                                }
+                            TactileIconButton(onClick = { exportVocabulary(VocabularyExportFormat.MARKDOWN) }) {
+                                Icon(Icons.Filled.IosShare, contentDescription = localizedText("导出"))
                             }
                         }
                     }
@@ -407,7 +390,7 @@ private fun KPilotApp(viewModel: MainViewModel) {
             if (!showingNoteDetail) {
                 KPilotBottomBar(
                     selected = destination,
-                    items = Destination.entries.filter { it.navigationItem in state.navigationItems },
+                    items = Destination.entries.filter { it.navigationItem in NavigationOptions.required || (it.navigationItem in state.navigationItems && it.navigationItem in setOf(NavigationItem.REMOTE, NavigationItem.VOCABULARY)) },
                     onSelect = { item ->
                         destination = item
                         transientDestination = false
@@ -424,30 +407,21 @@ private fun KPilotApp(viewModel: MainViewModel) {
                     Destination.LIBRARY -> LibraryScreen(
                         snapshot = state.library,
                         clippings = state.notes,
-                        syncing = state.librarySyncing,
+                        syncing = state.librarySyncing || state.notesSyncing,
                         errorMessage = state.libraryError,
                         onRefresh = viewModel::syncLibrary,
-                        onSendBooks = { navigateTo(Destination.SEND) },
+                        onRefreshClippings = viewModel::refreshLibraryFromKindle,
                         onOpenClipping = { note ->
                             noteReturnDestination = Destination.LIBRARY
                             viewModel.selectNote(note.id)
                             navigateTo(Destination.NOTES)
                         }
                     )
-                    Destination.REVIEW -> ReviewScreen(
-                        notes = state.notes, settings = state.settings,
-                        noteDrafts = state.noteDrafts,
-                        onOpenNote = { id ->
-                            noteReturnDestination = Destination.REVIEW
-                            viewModel.selectNote(id)
-                            navigateTo(Destination.NOTES)
-                        }
-                    )
                     Destination.SEND -> SendScreen(viewModel, state)
-                    Destination.NOTES -> NotesScreen(viewModel, state, notesSearchVisible, onReview = { navigateTo(Destination.REVIEW) })
-                    Destination.REMOTE -> RemoteScreen(viewModel, state)
-                    Destination.VOCABULARY -> VocabularyScreen(viewModel, state, vocabularySearchVisible)
-                    Destination.SETTINGS -> SettingsScreen(viewModel, state, onOpenDestination = { navigateTo(it) })
+                    Destination.NOTES -> PullToRefreshBox(isRefreshing = state.notesSyncing, onRefresh = viewModel::refreshLibraryFromKindle) { NotesScreen(viewModel, state, true) }
+                    Destination.REMOTE -> PullToRefreshBox(isRefreshing = state.connectionBusy || state.busy, onRefresh = viewModel::refreshRemoteControl) { RemoteScreen(viewModel, state) }
+                    Destination.VOCABULARY -> PullToRefreshBox(isRefreshing = state.vocabularySyncing, onRefresh = viewModel::refreshLibraryFromKindle) { VocabularyScreen(viewModel, state, true) }
+                    Destination.SETTINGS -> AlignedSettingsScreen(viewModel, state)
                 }
             }
         }
@@ -455,28 +429,8 @@ private fun KPilotApp(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun SyncAction(syncing: Boolean, onClick: () -> Unit, description: String) {
-    if (syncing) {
-        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-        }
-    } else {
-        TactileIconButton(onClick = onClick) { Icon(Icons.Filled.Sync, contentDescription = localizedText(description)) }
-    }
-}
-
-@Composable
 private fun TactileIconButton(onClick: () -> Unit, content: @Composable () -> Unit) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.padding(horizontal = 3.dp).size(42.dp),
-        shape = RoundedCornerShape(6.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 1.dp
-    ) {
-        Box(contentAlignment = Alignment.Center) { content() }
-    }
+    IconButton(onClick = onClick, content = content)
 }
 
 @Composable
@@ -485,7 +439,7 @@ private fun KPilotBottomBar(selected: Destination, items: List<Destination>, onS
         color = MaterialTheme.colorScheme.surfaceContainer,
         shadowElevation = 7.dp
     ) {
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(68.dp)) {
+        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(52.dp)) {
             items.forEach { item ->
                 val isSelected = selected == item
                 Box(
@@ -502,12 +456,11 @@ private fun KPilotBottomBar(selected: Destination, items: List<Destination>, onS
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Icon(
                             imageVector = item.icon,
-                            contentDescription = null,
+                            contentDescription = localizedText(item.label),
                             tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(24.dp)
                         )
-                        Text(item.label, style = MaterialTheme.typography.labelSmall,
-                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+
                     }
                 }
             }
@@ -517,65 +470,10 @@ private fun KPilotBottomBar(selected: Destination, items: List<Destination>, onS
 
 @Composable
 private fun SendScreen(viewModel: MainViewModel, state: UiState) {
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), viewModel::addTransferUris)
-    val readyCount = state.transfers.count { it.status == TransferStatus.READY }
-    val sending = state.transfers.any {
-        it.status in setOf(TransferStatus.CHECKING, TransferStatus.WAITING_FOR_COLLISION, TransferStatus.UPLOADING)
-    }
-
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        item {
-            if (state.settings.host.isBlank()) {
-                CompactBanner("请先在设置中填写 Kindle 地址", error = true)
-            }
-        }
-        item {
-            Button(
-                onClick = { picker.launch(SupportedTransferTypes.pickerMimeTypes) },
-                modifier = Modifier.fillMaxWidth().height(54.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Icon(Icons.Filled.FilePresent, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("选择书籍")
-            }
-        }
-        if (readyCount > 0) {
-            item {
-                FilledTonalButton(
-                    onClick = viewModel::sendReadyTransfers,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !sending
-                ) { Text("发送 $readyCount 本到 Kindle") }
-            }
-        }
-        if (state.transfers.isEmpty()) {
-            item {
-                EmptyState(
-                    icon = Icons.AutoMirrored.Filled.Send,
-                    title = "还没有待发送的书籍",
-                    subtitle = "支持 EPUB、PDF、MOBI、AZW3 和 TXT"
-                )
-            }
-        } else {
-            item {
-                Text("发送队列", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            }
-            items(state.transfers, key = TransferItem::id) { item ->
-                TransferRow(item, viewModel)
-            }
-            item {
-                Text(
-                    state.transferMessage,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal=20.dp,vertical=12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if(state.transfers.isEmpty()) item { EmptyState(Icons.AutoMirrored.Filled.Send,"暂无传书记录","") }
+        items(state.transfers,key=TransferItem::id) { item -> TransferRow(item,viewModel) }
     }
 }
 
@@ -599,29 +497,14 @@ private fun TransferRow(item: TransferItem, viewModel: MainViewModel) {
                 LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth())
             }
             item.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            if (TransferQueueRules.canRetry(item.status) || TransferQueueRules.canRemove(item.status)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (TransferQueueRules.canRetry(item.status)) {
-                        TextButton(onClick = { viewModel.retryTransfer(item.id) }) {
-                            Icon(Icons.Filled.Refresh, contentDescription = null)
-                            Text("重试")
-                        }
-                    }
-                    if (TransferQueueRules.canRemove(item.status)) {
-                        TextButton(onClick = { viewModel.removeTransfer(item.id) }) {
-                            Icon(Icons.Filled.DeleteOutline, contentDescription = null)
-                            Text("移除")
-                        }
-                    }
-                }
-            }
+
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible: Boolean, onReview: () -> Unit) {
+private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible: Boolean) {
     val notesListState = rememberLazyListState()
     val selected = state.selectedNoteId?.let { id -> state.notes.firstOrNull { it.id == id } }
     if (selected != null) {
@@ -629,14 +512,12 @@ private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible:
         return
     }
 
-    val context = LocalContext.current
     val visible = viewModel.visibleNotes()
     val bookCounts = state.notes.groupingBy { it.bookTitle }.eachCount().toSortedMap()
-    var showBooks by remember { mutableStateOf(false) }
-    var showFailureReason by remember { mutableStateOf(false) }
+    val showBooks = state.notesBookPickerVisible
 
     if (showBooks) {
-        ModalBottomSheet(onDismissRequest = { showBooks = false }) {
+        ModalBottomSheet(onDismissRequest = { viewModel.hideNotesBookPicker() }) {
             Text("选择书籍", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
             LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 item {
@@ -645,7 +526,7 @@ private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible:
                         supportingContent = { Text("${state.notes.size} 条") },
                         leadingContent = { Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null) },
                         trailingContent = { if (state.selectedBook == null) Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                        modifier = Modifier.clickable { viewModel.selectNotesBook(null); showBooks = false }
+                        modifier = Modifier.clickable { viewModel.selectNotesBook(null); viewModel.hideNotesBookPicker() }
                     )
                 }
                 items(bookCounts.entries.toList(), key = { it.key }) { (book, count) ->
@@ -653,138 +534,40 @@ private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible:
                         headlineContent = { Text(book, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                         supportingContent = { Text("$count 条") },
                         trailingContent = { if (state.selectedBook == book) Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                        modifier = Modifier.clickable { viewModel.selectNotesBook(book); showBooks = false }
+                        modifier = Modifier.clickable { viewModel.selectNotesBook(book); viewModel.hideNotesBookPicker() }
                     )
                 }
             }
         }
     }
 
-    if (showFailureReason) {
-        AlertDialog(
-            onDismissRequest = { showFailureReason = false },
-            icon = { Icon(Icons.Filled.ErrorOutline, contentDescription = null) },
-            title = { Text("同步失败") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(state.notesMessage)
-                    state.notesDiagnosticStage?.let { Text("阶段：$it") }
-                    state.notesDiagnosticCode?.let { code ->
-                        AssistChip(
-                            onClick = { copyDiagnosticCode(context, code) },
-                            label = { Text("诊断码 $code · 点按复制") }
-                        )
-                    }
-                    Text("手机中上一次成功同步的内容仍然保留。", style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = { TextButton(onClick = { showFailureReason = false }) { Text("关闭") } }
-        )
-    }
-
     Column(Modifier.fillMaxSize()) {
-        if (state.notesSyncing) {
-            val total = state.notesTotal
-            if (total != null && total > 0) {
-                LinearProgressIndicator(
-                    progress = { (state.notesDownloaded.toFloat() / total).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
         Column(
             Modifier.padding(start = 20.dp, top = 4.dp, end = 20.dp, bottom = 2.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (state.notes.any { it.kind in setOf(ClippingKind.HIGHLIGHT, ClippingKind.NOTE) && it.text.isNotBlank() }) {
-                OutlinedButton(onClick = onReview, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.History, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("笔记复习")
-                }
-            }
-            if (state.notesError) {
-                CompactErrorBanner(
-                    message = state.notesMessage,
-                    retryEnabled = NotesRetryPolicy.canRetry(state.settings.host, state.notesSyncing),
-                    onRetry = viewModel::syncNotes,
-                    onDetails = { showFailureReason = true }
-                )
-            }
+            if (state.notesError) Text(state.notesMessage, style=MaterialTheme.typography.bodySmall,
+                color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(vertical=8.dp))
             if (searchVisible) {
                 OutlinedTextField(
                     value = state.notesQuery,
                     onValueChange = viewModel::updateNotesQuery,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("搜索摘抄、书名或笔记") },
+                    placeholder = { Text("搜索") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     shape = RoundedCornerShape(16.dp)
                 )
             }
-            if (state.notes.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f).fillMaxHeight().clickable { showBooks = true }.padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Filled.FilterList, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            state.selectedBook ?: "全部书籍",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "${visible.size} 条",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                        Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Box(Modifier.width(1.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant))
-                    // 全部书籍固定按时间排序，仅书内可切换按位置/按时间。
-                    Row(
-                        modifier = Modifier.weight(0.82f).fillMaxHeight().then(
-                            if (state.selectedBook == null) Modifier else Modifier.clickable {
-                                viewModel.setNotesSortOrder(
-                                    if (state.notesSortOrder == NotesSortOrder.LOCATION) NotesSortOrder.ADDED_AT else NotesSortOrder.LOCATION
-                                )
-                            }
-                        ).padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            if (state.selectedBook != null && state.notesSortOrder == NotesSortOrder.LOCATION) "按位置" else "按时间",
-                            maxLines = 1,
-                            softWrap = false,
-                            color = if (state.selectedBook == null) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (state.selectedBook != null) {
-                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
         }
 
         when {
-            state.notes.isEmpty() && !state.notesSyncing -> EmptyState(
+            state.notes.isEmpty() && !state.notesSyncing -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { EmptyState(
                 icon = Icons.AutoMirrored.Filled.Notes,
                 title = if (state.notesLastSync == null) "还没有摘抄" else "Kindle 摘抄为空",
-                subtitle = "点按右上角同步，从 Kindle 读取摘抄"
-            )
-            visible.isEmpty() -> EmptyState(Icons.Filled.Search, "没有找到内容", "试试其他关键词或书籍")
+                subtitle = ""
+            ) }
+            visible.isEmpty() -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { EmptyState(Icons.Filled.Search, "没有找到内容", "") }
             else -> LazyColumn(
                 state = notesListState,
                 modifier = Modifier.weight(1f),
@@ -800,127 +583,35 @@ private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible:
 
 @Composable
 private fun NoteRow(note: KindleClipping, showBook: Boolean, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(9.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(5.dp).background(note.kind.labelColor(), CircleShape))
-                Spacer(Modifier.width(10.dp))
-                Text(note.kind.userLabel(), style = MaterialTheme.typography.labelLarge, color = note.kind.labelColor())
-                if (note.kindleNotes.isNotEmpty()) {
-                    Spacer(Modifier.width(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                    ) {
-                        Text(
-                            "${note.kindleNotes.size} 条笔记",
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                note.addedAt?.let {
-                    Text(formatNoteDate(it), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+    ListItem(
+        headlineContent = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (showBook) Text(note.bookTitle, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(note.text.ifBlank { note.metadata }, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
-            Text(
-                note.text.ifBlank { "无摘抄文字" },
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (showBook) {
-                    Text(
-                        note.bookTitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-                Icon(
-                    Icons.Filled.MoreHoriz,
-                    contentDescription = localizedText("查看摘抄详情"),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
-    }
+        },
+        supportingContent = { note.addedAt?.let { Text(formatNoteDate(it), style = MaterialTheme.typography.labelSmall) } },
+        trailingContent = { Row(verticalAlignment = Alignment.CenterVertically) {
+            if (note.kindleNotes.isNotEmpty()) Icon(Icons.AutoMirrored.Filled.Notes, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
+        } },
+        modifier = Modifier.clickable(onClick = onClick)
+    )
+    HorizontalDivider(Modifier.padding(start = 16.dp))
 }
 
 @Composable
 private fun NoteDetail(note: KindleClipping, viewModel: MainViewModel, state: UiState) {
-    var showDetails by rememberSaveable(note.id) { mutableStateOf(false) }
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(note.kind.userLabel(), color = note.kind.labelColor(), style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    note.addedAt?.let(::formatDate) ?: note.referenceText,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        item {
-            Text(note.text.ifBlank { "无摘抄文字" }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Normal)
-        }
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(note.bookTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                note.author?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-        }
-        if (note.kind == ClippingKind.HIGHLIGHT) {
-            item {
-                NoteWritebackSection(note, state, viewModel::saveNoteDraft, viewModel::sendNoteToKindle,
-                    viewModel::discardNoteDraft, viewModel::reloadNoteDrafts)
-            }
-        }
-        if (note.kindleNotes.isNotEmpty()) {
-            item { Text("Kindle 笔记", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.SemiBold) }
-            items(note.kindleNotes, key = KindleNote::id) { kindleNote ->
-                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row {
-                            Text("笔记", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary)
-                            Spacer(Modifier.weight(1f))
-                            Text(kindleNote.referenceText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Text(kindleNote.text, style = MaterialTheme.typography.bodyLarge)
-                    }
-                }
-            }
-        }
-        item {
-            TextButton(onClick = { showDetails = !showDetails }) {
-                Icon(if (showDetails) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, contentDescription = null)
-                Text(if (showDetails) "收起原始信息" else "查看原始信息")
-            }
-        }
-        if (showDetails) {
-            item {
-                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        note.addedAt?.let { Text("添加时间  ${formatDate(it)}", style = MaterialTheme.typography.bodySmall) }
-                        Text(note.metadata, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+    var information by rememberSaveable(note.id) { mutableStateOf(false) }
+    LazyColumn(Modifier.fillMaxSize().navigationBarsPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        item { androidx.compose.foundation.text.selection.SelectionContainer { Text(note.text.ifBlank { note.metadata },style=MaterialTheme.typography.headlineSmall) } }
+        if(note.kind == ClippingKind.HIGHLIGHT) item { NoteWritebackSection(note,state,viewModel::saveNoteDraft,viewModel::sendNoteToKindle,viewModel::discardNoteDraft,viewModel::reloadNoteDrafts) }
+        item { TextButton(onClick={information=!information}) { Text("书籍信息");Icon(if(information) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,null) } }
+        if(information) item {
+            Column(verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                Text(note.bookTitle);note.author?.let{Text(it)};Text(note.kind.userLabel())
+                Text(note.referenceText);note.addedAt?.let{Text(formatDate(it))}
             }
         }
     }
@@ -931,104 +622,32 @@ private fun VocabularyScreen(viewModel: MainViewModel, state: UiState, searchVis
     val visible = viewModel.visibleVocabularyWords()
     val selected = state.selectedVocabularyKey?.let { key -> state.vocabularyWords.firstOrNull { it.key == key } }
     selected?.let { word ->
-        AlertDialog(
-            onDismissRequest = { viewModel.selectVocabularyWord(null) },
-            title = { Text(word.displayWord) },
-            text = {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(word.lookups, key = { it.id }) { lookup ->
-                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(lookup.bookDisplay, style = MaterialTheme.typography.titleSmall)
-                            lookup.position?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
-                            if (lookup.usage.isNotBlank()) Text(lookup.usage)
-                            HorizontalDivider()
-                        }
+        AlertDialog(onDismissRequest = { viewModel.selectVocabularyWord(null) }, title = { Text(word.displayWord) },
+            text = { LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                items(word.lookups, key = { it.id }) { lookup ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (lookup.usage.isNotBlank()) Text(lookup.usage)
+                        Text(lookup.bookDisplay, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        lookup.position?.let { Text("位置 $it", style = MaterialTheme.typography.labelSmall) }
                     }
                 }
-            },
-            confirmButton = { TextButton(onClick = { viewModel.selectVocabularyWord(null) }) { Text("关闭") } }
-        )
+            } }, confirmButton = { TextButton(onClick = { viewModel.selectVocabularyWord(null) }) { Text("完成") } })
     }
-
     Column(Modifier.fillMaxSize()) {
-        if (state.vocabularySyncing) {
-            val total = state.vocabularyTotal
-            if (total != null && total > 0) {
-                LinearProgressIndicator(
-                    progress = { (state.vocabularyDownloaded.toFloat() / total).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (state.vocabularyError) {
-                CompactErrorBanner(state.vocabularyMessage, !state.vocabularySyncing, viewModel::syncVocabulary)
-            }
-            if (searchVisible) {
-                OutlinedTextField(
-                    value = state.vocabularyQuery,
-                    onValueChange = viewModel::updateVocabularyQuery,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("搜索单词、书名或上下文") },
-                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(16.dp)
-                )
-            }
-            if (state.vocabularyWords.isNotEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "${visible.size} 个单词",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    FilterChip(
-                        selected = true,
-                        onClick = {
-                            viewModel.setVocabularySortOrder(
-                                if (state.vocabularySortOrder == VocabularySortOrder.ALPHABETICAL) {
-                                    VocabularySortOrder.LOOKUP_COUNT
-                                } else {
-                                    VocabularySortOrder.ALPHABETICAL
-                                }
-                            )
-                        },
-                        label = {
-                            Text(
-                                if (state.vocabularySortOrder == VocabularySortOrder.LOOKUP_COUNT) "按查询次数" else "按字母"
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(18.dp))
-                        }
-                    )
-                }
-            }
-        }
-        when {
-            state.vocabularyWords.isEmpty() && !state.vocabularySyncing -> EmptyState(Icons.Filled.Spellcheck, "还没有生词", "点按右上角同步 Kindle 生词本")
-            visible.isEmpty() -> EmptyState(Icons.Filled.Search, "没有找到单词", "试试其他关键词")
-            else -> LazyColumn(
-                Modifier.weight(1f),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)
-            ) {
-                items(visible, key = VocabularyWord::key) { word ->
-                    Column(
-                        Modifier.fillMaxWidth().clickable { viewModel.selectVocabularyWord(word.key) }.padding(vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(word.displayWord, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            Text("${word.lookups.size} 次", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                        }
-                        word.lookups.firstOrNull()?.let {
-                            Text(it.bookDisplay, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (it.usage.isNotBlank()) Text(it.usage, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        }
-                        HorizontalDivider(modifier = Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
-                    }
-                }
+        OutlinedTextField(value = state.vocabularyQuery, onValueChange = viewModel::updateVocabularyQuery,
+            placeholder = { Text("搜索") }, leadingIcon = { Icon(Icons.Filled.Search, null) }, singleLine = true,
+            shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+        if (state.vocabularyError) Text(state.vocabularyMessage, color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp))
+        LazyColumn(Modifier.fillMaxSize()) {
+            if (visible.isEmpty()) item { EmptyState(Icons.Filled.Spellcheck, if(state.vocabularyWords.isEmpty()) "还没有生词" else "没有找到单词", "") }
+            items(visible, key = VocabularyWord::key) { word ->
+                ListItem(headlineContent = { Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(word.displayWord, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Text("${word.lookups.size} 次", style = MaterialTheme.typography.labelSmall)
+                } }, supportingContent = { word.lookups.firstOrNull()?.let { Text(it.usage.ifBlank { it.bookDisplay },maxLines=2,overflow=TextOverflow.Ellipsis) } },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,null) }, modifier = Modifier.clickable { viewModel.selectVocabularyWord(word.key) })
+                HorizontalDivider(Modifier.padding(start = 16.dp))
             }
         }
     }
@@ -1036,378 +655,35 @@ private fun VocabularyScreen(viewModel: MainViewModel, state: UiState, searchVis
 
 @Composable
 private fun RemoteScreen(viewModel: MainViewModel, state: UiState) {
-    val context = LocalContext.current
-    var pendingRecording by remember { mutableStateOf<FlipCommandDefinition?>(null) }
-    val setRemoteEnabled: (Boolean) -> Unit = { enabled ->
-        viewModel.setRemoteControlEnabled(enabled)
-    }
-    pendingRecording?.let { definition ->
-        AlertDialog(
-            onDismissRequest = { pendingRecording = null },
-            icon = { Icon(Icons.Filled.RadioButtonChecked, contentDescription = null) },
-            title = { Text("录制${definition.title}") },
-            text = {
-                Text("点按开始后，请在 5 秒内到 Kindle 上执行一次${definition.title}手势。旧录制会被替换。")
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingRecording = null
-                    viewModel.recordFlipCommand(definition)
-                }) { Text("开始录制") }
-            },
-            dismissButton = { TextButton(onClick = { pendingRecording = null }) { Text("取消") } }
-        )
-    }
-    state.remoteRecordingCommandId?.let { commandId ->
-        val definition = FlipCommandDefinition.all.firstOrNull { it.id == commandId }
-        AlertDialog(
-            onDismissRequest = {},
-            icon = { CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp) },
-            title = { Text("正在录制${definition?.title.orEmpty()}") },
-            text = { Text("请现在到 Kindle 上执行一次对应的翻页手势，录制将在 5 秒后自动结束。") },
-            confirmButton = {}
-        )
-    }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(10.dp).background(
-                        if (state.remoteControlEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                        CircleShape
-                    )
-                )
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("翻页遥控", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(if (state.remoteControlEnabled) "已开启" else "已关闭", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = state.remoteControlEnabled, onCheckedChange = setRemoteEnabled)
-            }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = { viewModel.submit(KindleCommand.PREVIOUS) },
-                enabled = state.remoteControlEnabled,
-                modifier = Modifier.weight(1f).height(88.dp),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null, modifier = Modifier.size(30.dp))
-                Text("上一页")
-            }
-            Button(
-                onClick = { viewModel.submit(KindleCommand.NEXT) },
-                enabled = state.remoteControlEnabled,
-                modifier = Modifier.weight(1f).height(88.dp),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Text("下一页")
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(30.dp))
-            }
-        }
-
-        FlipCommandPanel(
-            state = state,
-            onCheck = viewModel::checkFlipCommands,
-            onRecord = { pendingRecording = it }
-        )
-
-        Text("控制方式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        SettingsGroup {
-            SwitchRow(
-                icon = Icons.AutoMirrored.Filled.VolumeUp,
-                title = "手机音量键",
-                subtitle = "音量加上一页，音量减下一页",
-                checked = state.volumeKeysEnabled,
-                enabled = state.remoteControlEnabled,
-                onCheckedChange = viewModel::setVolumeKeysEnabled
-            )
-            HorizontalDivider(Modifier.padding(start = 56.dp))
-            SwitchRow(
-                icon = Icons.Filled.Keyboard,
-                title = "蓝牙键盘方向键",
-                subtitle = "↑、← 上一页，↓、→ 下一页",
-                checked = state.keyboardKeysEnabled,
-                enabled = state.remoteControlEnabled,
-                onCheckedChange = viewModel::setKeyboardKeysEnabled
-            )
-            HorizontalDivider(Modifier.padding(start = 56.dp))
-            SwitchRow(
-                icon = Icons.Filled.Watch,
-                title = "小米手环",
-                subtitle = when {
-                    state.xiaomiBandConnected -> "手机已连接"
-                    state.xiaomiBandEnabled -> "等待手环连接"
-                    else -> "未开启"
-                },
-                checked = state.xiaomiBandEnabled,
-                onCheckedChange = viewModel::setXiaomiBandEnabled
-            )
-            if (state.xiaomiBandEnabled && !state.xiaomiBandConnected) {
-                Text(
-                    state.xiaomiBandMessage,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (state.xiaomiBandError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 56.dp, end = 16.dp, bottom = 4.dp)
-                )
-                TextButton(onClick = viewModel::reconnectXiaomiBand, modifier = Modifier.padding(start = 48.dp)) { Text("重新连接") }
-            }
-            HorizontalDivider(Modifier.padding(start = 56.dp))
-            ListItem(
-                headlineContent = { Text("后台音量键") },
-                supportingContent = { Text(if (state.accessibilityServiceEnabled) "系统权限已开启" else "需要辅助功能权限") },
-                leadingContent = { Icon(Icons.Filled.Accessibility, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
-                colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.clickable {
-                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-            )
-        }
-        if (state.busy || state.isError) CompactBanner(state.status, state.isError, state.busy)
-    }
-}
-
-@Composable
-private fun FlipCommandPanel(
-    state: UiState,
-    onCheck: () -> Unit,
-    onRecord: (FlipCommandDefinition) -> Unit
-) {
-    var showAllCommands by rememberSaveable { mutableStateOf(false) }
-    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.RadioButtonChecked, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(10.dp))
-                Text("翻页命令", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                TextButton(onClick = onCheck, enabled = !state.busy) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text(if (state.remoteCommandsChecked) "刷新" else "检查")
-                }
-            }
-            when {
-                !state.remoteCommandsChecked -> {
-                    Text(
-                        "首次翻页前会自动检查 Kindle 中的 4 个事件文件，也可以现在检查。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    TextButton(onClick = { showAllCommands = !showAllCommands }) {
-                        Icon(if (showAllCommands) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, contentDescription = null)
-                        Text(if (showAllCommands) "收起录制选项" else "查看录制选项")
-                    }
-                    if (showAllCommands) {
-                        FlipCommandRows(
-                            definitions = FlipCommandDefinition.all,
-                            checked = false,
-                            missing = emptyList(),
-                            enabled = !state.busy,
-                            onRecord = onRecord
-                        )
-                    }
-                }
-                state.missingFlipCommands.isEmpty() -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("4 个翻页命令都已就绪", color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { showAllCommands = !showAllCommands }) {
-                            Text(if (showAllCommands) "收起" else "管理")
-                        }
-                    }
-                    if (showAllCommands) {
-                        FlipCommandRows(
-                            definitions = FlipCommandDefinition.all,
-                            checked = true,
-                            missing = emptyList(),
-                            enabled = !state.busy,
-                            onRecord = onRecord
-                        )
-                    }
-                }
-                else -> {
-                    Text(
-                        "缺少 ${state.missingFlipCommands.size} 个命令。点按录制后，请在 5 秒内操作 Kindle。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    FlipCommandRows(
-                        definitions = if (showAllCommands) FlipCommandDefinition.all else state.missingFlipCommands,
-                        checked = true,
-                        missing = state.missingFlipCommands,
-                        enabled = !state.busy,
-                        onRecord = onRecord
-                    )
-                    TextButton(onClick = { showAllCommands = !showAllCommands }) {
-                        Icon(if (showAllCommands) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, contentDescription = null)
-                        Text(if (showAllCommands) "只看缺失命令" else "管理全部命令")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FlipCommandRows(
-    definitions: List<FlipCommandDefinition>,
-    checked: Boolean,
-    missing: List<FlipCommandDefinition>,
-    enabled: Boolean,
-    onRecord: (FlipCommandDefinition) -> Unit
-) {
-    definitions.forEachIndexed { index, definition ->
-        val ready = checked && definition !in missing
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                if (ready) Icons.Filled.CheckCircle else Icons.Filled.Info,
-                contentDescription = null,
-                tint = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(19.dp)
-            )
+    val connected = state.connected
+    val busy = state.busy || state.connectionBusy
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp,vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
+            Box(Modifier.size(8.dp).background(if(connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,CircleShape))
             Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(definition.title, fontWeight = FontWeight.Medium)
-                Text(
-                    definition.remotePath.substringAfterLast('/'),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            OutlinedButton(onClick = { onRecord(definition) }, enabled = enabled) {
-                Icon(Icons.Filled.RadioButtonChecked, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (ready) "重新录制" else "录制")
-            }
+            Column(Modifier.weight(1f)) { Text(if(connected) "Kindle" else "Kindle 未连接",style=MaterialTheme.typography.titleSmall); Text(if(busy) "处理中" else if(connected) "已连接" else "未连接",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
+            Text(state.settings.host,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.outline)
         }
-        if (index != definitions.lastIndex) HorizontalDivider()
-    }
-}
-
-@Composable
-private fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenDestination: (Destination) -> Unit) {
-    val settings = state.settings
-    var showAdvanced by rememberSaveable { mutableStateOf(false) }
-    var showHelp by remember { mutableStateOf(false) }
-    if (showHelp) {
-        AlertDialog(
-            onDismissRequest = { showHelp = false },
-            icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-            title = { Text("连接 Kindle") },
-            text = {
-                Text(
-                    "请确保 Kindle 已开启 SSH（UsbNet 或 UsbNetLite），并与手机处于可互通的网络。翻页还需要 Kindle 中已有 FlipCmd 事件文件。后台或熄屏运行可能受 Android 或厂商电池策略限制；是否在系统设置中允许 KPilot 不受电池优化限制，由你自行决定。"
-                )
-            },
-            confirmButton = { TextButton(onClick = { showHelp = false }) { Text("知道了") } }
-        )
-    }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("Kindle 连接", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-            value = settings.host,
-            onValueChange = { viewModel.updateSettings(settings.copy(host = it.trim())) },
-            label = { Text("IP 地址或主机名") },
-            placeholder = { Text("例如 192.168.15.244") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp)
-        )
-        OutlinedTextField(
-            value = settings.password,
-            onValueChange = { viewModel.updateSettings(settings.copy(password = it)) },
-            label = { Text("密码（可留空）") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp)
-        )
-        TextButton(onClick = { showAdvanced = !showAdvanced }) {
-            Icon(if (showAdvanced) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, contentDescription = null)
-            Text(if (showAdvanced) "收起高级设置" else "高级设置")
-        }
-        if (showAdvanced) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = settings.port.toString(),
-                    onValueChange = { value -> value.toIntOrNull()?.let { viewModel.updateSettings(settings.copy(port = it)) } },
-                    label = { Text("端口") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(16.dp)
-                )
-                OutlinedTextField(
-                    value = settings.username,
-                    onValueChange = { viewModel.updateSettings(settings.copy(username = it.trim())) },
-                    label = { Text("用户名") },
-                    singleLine = true,
-                    modifier = Modifier.weight(2f),
-                    shape = RoundedCornerShape(16.dp)
-                )
-            }
-            OutlinedTextField(
-                value = settings.eventDevice,
-                onValueChange = { viewModel.updateSettings(settings.copy(eventDevice = it.trim())) },
-                label = { Text("触控设备（留空自动检测）") },
-                placeholder = { Text("例如 event1") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp)
-            )
-            OutlinedButton(
-                onClick = viewModel::detectTouchDevice,
-                enabled = !state.busy,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Filled.Search, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("自动检测触控设备")
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = viewModel::save, modifier = Modifier.weight(1f)) { Text("保存") }
-            OutlinedButton(onClick = viewModel::testConnection, enabled = !state.busy, modifier = Modifier.weight(1f)) { Text("测试连接") }
-        }
-        if (state.busy || state.isError || state.status != "请填写 Kindle 连接信息") {
-            CompactBanner(state.status, state.isError, state.busy)
-        }
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-        Text("底部导航栏", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("最多显示 5 个入口，摘抄和设置始终保留。关闭的入口仍可在下方打开。",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SettingsGroup {
-            Destination.entries.filter { it.navigationItem !in NavigationOptions.required }.forEach { item ->
-                val checked = item.navigationItem in state.navigationItems
-                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(item.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    TextButton(onClick = { onOpenDestination(item) }, modifier = Modifier.weight(1f)) { Text(item.label) }
-                    Switch(checked = checked,
-                        onCheckedChange = { viewModel.setNavigationItem(item.navigationItem, it) },
-                        enabled = checked || state.navigationItems.size < NavigationOptions.maximumItems)
-                }
+            Row(Modifier.padding(14.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                Button(onClick={viewModel.submit(KindleCommand.PREVIOUS)},enabled=connected&&!busy,modifier=Modifier.weight(1f).height(64.dp),shape=RoundedCornerShape(14.dp)) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft,null);Text("上一页") }
+                Button(onClick={viewModel.submit(KindleCommand.NEXT)},enabled=connected&&!busy,modifier=Modifier.weight(1f).height(64.dp),shape=RoundedCornerShape(14.dp)) { Text("下一页");Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,null) }
+            }
+            HorizontalDivider(Modifier.padding(horizontal=14.dp))
+            SwitchRow(Icons.AutoMirrored.Filled.VolumeUp,"音量键翻页","",state.volumeKeysEnabled,connected,viewModel::setVolumeKeysEnabled)
+            HorizontalDivider(Modifier.padding(horizontal=14.dp))
+            SwitchRow(Icons.Filled.Watch,"小米手环",if(state.xiaomiBandConnected) "已连接" else if(state.xiaomiBandEnabled) "未连接" else "",state.xiaomiBandEnabled,connected,viewModel::setXiaomiBandEnabled)
+        }
+        if (!connected || state.missingFlipCommands.isNotEmpty()) SettingsGroup {
+            Column(Modifier.fillMaxWidth().padding(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                Text(if(state.settings.host.isBlank()) "请先在设置中连接 Kindle" else if(!connected) "Kindle 未连接" else "需要录制翻页手势",style=MaterialTheme.typography.titleMedium)
+                if(connected) state.missingFlipCommands.forEach { definition -> OutlinedButton(onClick={viewModel.recordFlipCommand(definition)},enabled=!busy,modifier=Modifier.fillMaxWidth()) { Icon(Icons.Filled.RadioButtonChecked,null);Spacer(Modifier.width(8.dp));Text("录制${definition.title}") } }
             }
         }
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-        ListItem(
-            headlineContent = { Text("连接帮助") },
-            supportingContent = { Text("SSH 与翻页功能的准备事项") },
-            leadingContent = { Icon(Icons.Filled.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
-            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.clickable { showHelp = true }
-        )
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-        SupportKPilotEntry()
+        if(state.isError) Text(state.status,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
     }
+    if(state.remoteRecordingCommandId!=null) AlertDialog(onDismissRequest={},title={Text("正在录制")},text={LinearProgressIndicator(Modifier.fillMaxWidth())},confirmButton={})
 }
 
 @Composable
@@ -1431,7 +707,7 @@ private fun SwitchRow(
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if(subtitle.isNotBlank()) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
@@ -1446,7 +722,7 @@ private fun EmptyState(icon: ImageVector, title: String, subtitle: String) {
     ) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(46.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f))
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if(subtitle.isNotBlank()) Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

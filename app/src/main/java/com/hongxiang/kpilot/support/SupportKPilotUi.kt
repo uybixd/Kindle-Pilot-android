@@ -82,17 +82,15 @@ private enum class QrCodeDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SupportKPilotEntry() {
+fun SupportKPilotEntry(compact: Boolean = false) {
     var showSupport by rememberSaveable { mutableStateOf(false) }
     var qrDialog by remember { mutableStateOf<QrCodeDialog?>(null) }
 
     ListItem(
         headlineContent = {
-            Text("支持 KPilot", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+            Text(if (compact) "支持作者" else "支持 KPilot", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
         },
-        supportingContent = {
-            Text("KPilot 免费开放全部功能。你的关注、反馈和赞赏，会帮助项目继续维护。")
-        },
+        supportingContent = if (compact) null else ({ Text("KPilot 免费开放全部功能。你的关注、反馈和赞赏，会帮助项目继续维护。") }),
         leadingContent = {
             Icon(
                 Icons.AutoMirrored.Filled.Send,
@@ -150,17 +148,13 @@ private fun SupportSheetContent(onShowQrCode: (QrCodeDialog) -> Unit) {
             Spacer(Modifier.width(13.dp))
             Text("支持 KPilot", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         }
-        Text(
-            "KPilot 免费开放全部功能。你的关注、反馈和赞赏，会帮助项目继续维护。",
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
 
         HorizontalDivider(Modifier.padding(vertical = 3.dp))
         Text("参与交流", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         SupportGroup {
             ListItem(
                 headlineContent = { Text("KPilot 用户交流与反馈群") },
-                supportingContent = { Text("问题反馈、使用交流与版本通知\nQQ群：$QQ_GROUP_NUMBER") },
+                supportingContent = { Text("QQ群：$QQ_GROUP_NUMBER") },
                 leadingContent = {
                     Icon(Icons.Filled.Groups, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 },
@@ -191,7 +185,7 @@ private fun SupportSheetContent(onShowQrCode: (QrCodeDialog) -> Unit) {
             SupportActionRow(
                 icon = Icons.Filled.QrCode2,
                 title = "微信公众号 · Xiangware",
-                subtitle = "获取版本更新与使用说明",
+                subtitle = "",
                 action = "查看二维码",
                 onClick = { onShowQrCode(QrCodeDialog.OFFICIAL_ACCOUNT) }
             )
@@ -202,7 +196,7 @@ private fun SupportSheetContent(onShowQrCode: (QrCodeDialog) -> Unit) {
             SupportActionRow(
                 icon = Icons.Filled.FavoriteBorder,
                 title = "请作者喝杯咖啡",
-                subtitle = "赞赏不会解锁功能，但可能解锁更新",
+                subtitle = "",
                 action = "查看赞赏码",
                 onClick = { onShowQrCode(QrCodeDialog.REWARD) }
             )
@@ -230,7 +224,7 @@ private fun SupportActionRow(
 ) {
     ListItem(
         headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
+        supportingContent = if(subtitle.isBlank()) null else ({ Text(subtitle) }),
         leadingContent = { Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
         trailingContent = { Text(action, color = MaterialTheme.colorScheme.primary) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),

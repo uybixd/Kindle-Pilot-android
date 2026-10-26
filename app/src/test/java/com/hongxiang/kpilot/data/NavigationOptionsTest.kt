@@ -10,15 +10,17 @@ class NavigationOptionsTest {
         assertEquals(NavigationOptions.required, NavigationOptions.decode(setOf("UNKNOWN")))
     }
 
-    @Test fun limitRequiresHidingAnOptionalTabBeforeAddingAnother() {
+    @Test fun onlyVocabularyAndRemoteCanBeHidden() {
         val defaults = NavigationOptions.defaults
-        assertEquals(defaults, NavigationOptions.update(defaults, NavigationItem.REVIEW, true))
-        val hidden = NavigationOptions.update(defaults, NavigationItem.VOCABULARY, false)
-        val updated = NavigationOptions.update(hidden, NavigationItem.REVIEW, true)
-        assertTrue(NavigationItem.REVIEW in updated)
-        assertFalse(NavigationItem.VOCABULARY in updated)
-        assertEquals(updated, NavigationOptions.update(updated, NavigationItem.NOTES, false))
-        assertEquals(updated, NavigationOptions.decode(updated.map { it.name }.toSet()))
+        assertEquals(defaults,NavigationOptions.update(defaults,NavigationItem.REVIEW,true))
+        assertEquals(defaults,NavigationOptions.update(defaults,NavigationItem.SEND,true))
+        assertEquals(defaults,NavigationOptions.update(defaults,NavigationItem.LIBRARY,false))
+        assertEquals(defaults,NavigationOptions.update(defaults,NavigationItem.NOTES,false))
+        assertEquals(defaults,NavigationOptions.update(defaults,NavigationItem.SETTINGS,false))
+        val hidden = NavigationOptions.update(NavigationOptions.update(defaults,NavigationItem.VOCABULARY,false),NavigationItem.REMOTE,false)
+        assertEquals(NavigationOptions.required,hidden)
+        assertEquals(hidden,NavigationOptions.decode(hidden.map{it.name}.toSet()))
+        assertEquals(defaults,NavigationOptions.decode(setOf("NOTES","VOCABULARY","REMOTE","REVIEW","SEND")))
     }
 
     @Test fun connectionScopeSurvivesCredentialEditsButSeparatesDevices() {

@@ -7,32 +7,33 @@ KPilot is an Android companion app for jailbroken Kindle devices. It connects to
 - Book transfer for EPUB, PDF, MOBI, AZW3, and TXT files
 - Downloading and browsing `My Clippings.txt`
 - A cached Kindle library with covers, reading progress, search, and per-book clippings
-- Nine-card clipping review batches, favorites, exclusions, undo, and saved progress
 - Offline note editing and writeback to existing AZW3, MOBI, and KFX highlights
 - Downloading and browsing Kindle vocabulary
 - Remote page turning from the phone, hardware keys, or a Xiaomi wearable
 - Local encrypted storage for Kindle SSH connection settings
-- Configurable bottom navigation tabs
+- Icon-only navigation with optional Vocabulary and Remote tabs
 
 The Kindle must have UsbNet or UsbNetLite installed, with SSH enabled, and must be reachable from the Android device.
 
 ## Using the new features
 
-Refresh Library to cache the book list, available covers, and reading progress. Open a book to view its clippings; sync those from Clippings first. When Kindle's catalog database is unavailable, the library falls back to filenames. The Library send button opens the existing book-transfer queue.
+Pull down to refresh Books, Clippings, Vocabulary, and Remote. The bookshelf uses three columns, with book import and transfer status in its toolbar. Open a book to browse its clippings.
 
-Open Review from Clippings for batches of up to nine cards. Less-reviewed content comes first, with books interleaved. Swipe left to favorite or right to exclude, or use the buttons. History, daily counts, and progress are saved locally.
+Settings groups Kindle Connection, Bottom Navigation, Local Data, About, and Support the Author. Connection supports multiple Kindle profiles. Local Data provides file import, library backup export, cache information, and local-data clearing. Passwords are encrypted with Android Keystore.
 
-Open an existing highlight, edit its note, save locally, then send to Kindle. Return to the Kindle home screen before sending. Save and send an empty note to delete the annotation while keeping its highlight. A successful send retains the local copy; restoring the last synced note only discards that local copy. Creating new highlights is not supported.
+Clippings, Books, and Settings stay visible. Only Vocabulary and Remote can be hidden. Remote keeps page-turn buttons, volume-key control, and the Xiaomi band option. Clipping and vocabulary review are currently omitted.
+
+Edit an existing highlight's note directly; changes are saved locally. Send the saved note to the current Kindle after returning to its home screen. Sending a cleared note deletes the annotation and keeps the highlight.
 
 Writeback verifies the target highlight, updates its reader sidecar and `My Clippings.txt`, and keeps `.kpilot-note-backup-*.bak` files beside the originals. Failed verification triggers recovery. Recovery refuses to overwrite changes made by another writer and reports the retained backups. Ambiguous matches, unsupported formats, and unknown reader states stop the write and retain the local draft.
 
-Library, Clippings, Vocabulary, Remote, and Settings are visible by default. Choose up to five tabs in Settings; Clippings and Settings stay visible. Review, Send, and hidden features remain accessible from Settings. Library data, clippings, note drafts, and review history are scoped by host, port, and username. Changing the address selects a different local namespace.
+Library data, clippings, vocabulary, and note drafts are scoped by host, port, and username.
 
 ## Build
 
 Open the project in Android Studio and build the `app` module.
 
-The Gradle toolchain uses Java 25. Run `./gradlew testDebugUnitTest assembleDebug lintDebug` for local checks. Unit tests cover offline persistence, review ordering, annotation matching, two-file writes, and failure recovery. Kindle firmware and SSH behavior still need device verification.
+The Gradle toolchain uses Java 25. Run `./gradlew testDebugUnitTest assembleDebug lintDebug` for local checks. Unit tests cover offline persistence, navigation rules, annotation matching, two-file writes, and failure recovery. Kindle firmware and SSH behavior still need device verification.
 
 The Xiaomi wearable integration depends on Xiaomi's closed-source wearable interconnection SDK. The SDK is not included in this repository. Obtain it yourself and copy the following file into the project before building:
 

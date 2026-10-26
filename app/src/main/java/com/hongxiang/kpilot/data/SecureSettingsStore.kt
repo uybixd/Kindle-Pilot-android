@@ -11,8 +11,8 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class SecureSettingsStore(context: Context) {
-    private val preferences = context.getSharedPreferences("secure_connection", Context.MODE_PRIVATE)
+class SecureSettingsStore(context: Context, namespace: String = "secure_connection") {
+    private val preferences = context.getSharedPreferences(namespace, Context.MODE_PRIVATE)
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     fun save(settings: ConnectionSettings) {
@@ -45,6 +45,8 @@ class SecureSettingsStore(context: Context) {
             .toString(Charsets.UTF_8).split('\u0000')
         ConnectionSettings(values[0], values[1].toInt(), values[2], values[3], values[4])
     }.getOrNull()
+
+    fun clear() { preferences.edit { this.clear() } }
 
     private fun key(): SecretKey {
         (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }

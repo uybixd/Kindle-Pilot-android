@@ -52,6 +52,10 @@ class VocabularyTest {
         assertTrue(VocabularyExporter.export(snapshot.words, VocabularyExportFormat.TEXT).contains("Book A"))
         val csv = VocabularyExporter.export(snapshot.words, VocabularyExportFormat.CSV)
         assertTrue(csv.startsWith("word,stem,book_title"))
+        val markdown = VocabularyExporter.export(snapshot.words, VocabularyExportFormat.MARKDOWN)
+        assertTrue(markdown.startsWith("## test"))
+        assertTrue(markdown.contains("> first"))
+        assertTrue(markdown.contains("Book B"))
         assertTrue(csv.contains("\"second, quoted\""))
     }
 

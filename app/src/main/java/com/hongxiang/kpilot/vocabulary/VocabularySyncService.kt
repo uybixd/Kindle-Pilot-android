@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import com.hongxiang.kpilot.data.ConnectionSettings
+import com.hongxiang.kpilot.data.cacheScope
 import com.hongxiang.kpilot.notes.AtomicCache
 import com.hongxiang.kpilot.notes.AtomicCacheException
 import com.hongxiang.kpilot.notes.AtomicCacheStage
@@ -16,10 +17,19 @@ import java.io.OutputStream
 import java.time.Instant
 
 class VocabularySyncService(context: Context) {
-    private val cacheFile = context.noBackupFilesDir.resolve("vocabulary/vocab.db")
+    private val directory = context.noBackupFilesDir.resolve("vocabulary")
+    private fun cacheFile(settings: ConnectionSettings) = directory.resolve("${settings.cacheScope()}/vocab.db")
+    fun migrateLegacyCache(settings: ConnectionSettings) {
+        if (settings.host.isBlank()) return
+        val original = directory.resolve("vocab.db"); val destination = cacheFile(settings)
+        if (original.isFile && !destination.exists()) {
+            check(destination.parentFile?.let { it.isDirectory || it.mkdirs() } == true && original.renameTo(destination))
+        }
+    }
 
     fun sync(settings: ConnectionSettings, onProgress: (Long, Long?) -> Unit): VocabularySnapshot = try {
         withSession(settings) { session ->
+            val cacheFile = cacheFile(settings)
             var validatedLookups: List<VocabularyLookup>? = null
             AtomicCache.writeValidated(
                 destination = cacheFile,
@@ -38,9 +48,17 @@ class VocabularySyncService(context: Context) {
         throw VocabularySyncException(VocabularyDiagnostics.unknown(), error)
     }
 
-    fun loadCached(): VocabularySnapshot? = if (cacheFile.isFile) {
-        VocabularySnapshot(VocabularyDatabase.read(cacheFile), Instant.ofEpochMilli(cacheFile.lastModified()), cacheFile.length())
-    } else null
+    fun loadCached(settings: ConnectionSettings): VocabularySnapshot? {
+        val file = cacheFile(settings)
+        return if (file.isFile) VocabularySnapshot(VocabularyDatabase.read(file), Instant.ofEpochMilli(file.lastModified()), file.length()) else null
+    }
+
+    fun importBytes(settings: ConnectionSettings, bytes: ByteArray): VocabularySnapshot {
+        val file = cacheFile(settings)
+        var lookups: List<VocabularyLookup> = emptyList()
+        AtomicCache.writeValidated(file, { it.write(bytes) }, { lookups = VocabularyDatabase.read(it) })
+        return VocabularySnapshot(lookups, Instant.now(), file.length())
+    }
 
     private fun <T> withSession(settings: ConnectionSettings, block: (Session) -> T): T {
         settings.validate()
