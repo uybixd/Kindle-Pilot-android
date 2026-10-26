@@ -272,6 +272,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
         xiaomiBandController.refresh()
     }
 
+    fun reconnectXiaomiBand() {
+        xiaomiBandController.reconnect()
+    }
+
     override fun submit(command: KindleCommand) {
         remoteDispatcher.submit(command)
     }
@@ -488,13 +492,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                     note.kindleNotes.flatMap { listOf(it.metadata, it.text) })
                     .any { it.contains(query, ignoreCase = true) })
         }
-        val byBook = if (current.selectedBook == null) compareBy<KindleClipping> { it.bookTitle.lowercase() } else compareBy { "" }
+        // 全部笔记：有且只有按时间倒序（新笔记在最上），不按书籍分组。
+        if (current.selectedBook == null) {
+            return filtered.sortedWith(
+                compareByDescending<KindleClipping> { it.addedAt ?: Instant.MIN }.thenBy { it.id }
+            )
+        }
+        // 单本书内：可按位置或时间排序。
         return when (current.notesSortOrder) {
             NotesSortOrder.LOCATION -> filtered.sortedWith(
-                byBook.thenBy { it.locationStart ?: Int.MAX_VALUE }.thenBy { it.addedAt ?: Instant.MAX }
+                compareBy<KindleClipping> { it.locationStart ?: Int.MAX_VALUE }.thenBy { it.addedAt ?: Instant.MAX }
             )
             NotesSortOrder.ADDED_AT -> filtered.sortedWith(
-                byBook.thenByDescending { it.addedAt ?: Instant.MIN }.thenBy { it.locationStart ?: Int.MAX_VALUE }
+                compareByDescending<KindleClipping> { it.addedAt ?: Instant.MIN }.thenBy { it.locationStart ?: Int.MAX_VALUE }
             )
         }
     }

@@ -665,23 +665,29 @@ private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible:
                         Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Box(Modifier.width(1.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                    // 全部书籍固定按时间排序，仅书内可切换按位置/按时间。
                     Row(
-                        modifier = Modifier.weight(0.82f).fillMaxHeight().clickable {
-                            viewModel.setNotesSortOrder(
-                                if (state.notesSortOrder == NotesSortOrder.LOCATION) NotesSortOrder.ADDED_AT else NotesSortOrder.LOCATION
-                            )
-                        }.padding(horizontal = 10.dp),
+                        modifier = Modifier.weight(0.82f).fillMaxHeight().then(
+                            if (state.selectedBook == null) Modifier else Modifier.clickable {
+                                viewModel.setNotesSortOrder(
+                                    if (state.notesSortOrder == NotesSortOrder.LOCATION) NotesSortOrder.ADDED_AT else NotesSortOrder.LOCATION
+                                )
+                            }
+                        ).padding(horizontal = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            if (state.notesSortOrder == NotesSortOrder.LOCATION) "按位置" else "按时间",
+                            if (state.selectedBook != null && state.notesSortOrder == NotesSortOrder.LOCATION) "按位置" else "按时间",
                             maxLines = 1,
                             softWrap = false,
+                            color = if (state.selectedBook == null) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
                             modifier = Modifier.weight(1f)
                         )
-                        Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (state.selectedBook != null) {
+                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -1051,7 +1057,13 @@ private fun RemoteScreen(viewModel: MainViewModel, state: UiState) {
                 onCheckedChange = viewModel::setXiaomiBandEnabled
             )
             if (state.xiaomiBandEnabled && !state.xiaomiBandConnected) {
-                TextButton(onClick = viewModel::refreshXiaomiBand, modifier = Modifier.padding(start = 48.dp)) { Text("重新连接") }
+                Text(
+                    state.xiaomiBandMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state.xiaomiBandError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 56.dp, end = 16.dp, bottom = 4.dp)
+                )
+                TextButton(onClick = viewModel::reconnectXiaomiBand, modifier = Modifier.padding(start = 48.dp)) { Text("重新连接") }
             }
             HorizontalDivider(Modifier.padding(start = 56.dp))
             ListItem(

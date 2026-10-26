@@ -83,6 +83,11 @@ class XiaomiBandController private constructor(context: Context) {
         if (preferences.xiaomiBandEnabled) connect(requestPermission = false)
     }
 
+    /** Manual retry from the UI: allow re-prompting for wearable permission. */
+    fun reconnect() {
+        if (preferences.xiaomiBandEnabled) connect(requestPermission = true)
+    }
+
     private fun ensureServiceListener() {
         if (serviceListenerRegistered) return
         serviceApi.registerServiceConnectionListener(serviceListener)
@@ -117,7 +122,14 @@ class XiaomiBandController private constructor(context: Context) {
                             )
                         }
                     }
-                    .addOnFailureListener { failure -> reportFailure("Could not check wearable permission", failure) }
+                    .addOnFailureListener { failure ->
+                        // checkPermission fails outright when the stored grant is bound
+                        // to a different signing certificate than the running APK
+                        // (e.g. after switching between debug and release builds).
+                        // Re-requesting re-binds the grant to the current signature.
+                        if (requestPermission) requestDevicePermission(node.id)
+                        else reportFailure("Could not check wearable permission", failure)
+                    }
             }
             .addOnFailureListener { failure -> reportFailure("Could not query paired Xiaomi wearables", failure) }
     }
