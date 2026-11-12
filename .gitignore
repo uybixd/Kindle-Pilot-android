@@ -40,6 +40,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Tool attachments and local recordings
+.codex-attachments/
+
 # Runtime and editor leftovers
 *.log
 *.hprof
