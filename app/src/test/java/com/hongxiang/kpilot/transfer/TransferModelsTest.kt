@@ -23,14 +23,19 @@ class TransferModelsTest {
     }
 
     @Test
-    fun parsesOnlySupportedDocumentPaths() {
-        val output = """/mnt/us/documents/One.epub
-/mnt/us/documents/folder/Two.PDF
-/mnt/us/documents/note.txt
+    fun parsesOnlySupportedDocumentPathsBelowTheTransferDirectory() {
+        val output = """/mnt/us/documents/Downloads/Items01/One.epub
+/mnt/us/documents/Downloads/Items01/folder/Two.PDF
+/mnt/us/documents/Downloads/Items01/note.txt
+/mnt/us/documents/Other.epub
 /tmp/Three.mobi
-/mnt/us/documents/One.epub"""
+/mnt/us/documents/Downloads/Items01/One.epub"""
         assertEquals(
-            listOf("/mnt/us/documents/One.epub", "/mnt/us/documents/folder/Two.PDF", "/mnt/us/documents/note.txt"),
+            listOf(
+                "/mnt/us/documents/Downloads/Items01/One.epub",
+                "/mnt/us/documents/Downloads/Items01/folder/Two.PDF",
+                "/mnt/us/documents/Downloads/Items01/note.txt"
+            ),
             RemoteDocumentNaming.parseRemotePaths(output)
         )
     }
@@ -38,11 +43,16 @@ class TransferModelsTest {
     @Test
     fun collisionMatchesFileNameOrNormalizedTitle() {
         val remote = listOf(
-            "/mnt/us/documents/My   Book.pdf",
-            "/mnt/us/documents/Other.epub"
+            "/mnt/us/documents/Downloads/Items01/My   Book.pdf",
+            "/mnt/us/documents/Downloads/Items01/Other.epub"
         )
         assertEquals(listOf(remote[0]), RemoteDocumentNaming.collisions("my book.EPUB", remote))
         assertEquals(listOf(remote[1]), RemoteDocumentNaming.collisions("Other.epub", remote))
+    }
+
+    @Test
+    fun uploadsGoBelowTheConfiguredKindleDirectory() {
+        assertEquals("/mnt/us/documents/Downloads/Items01", RemoteDocumentNaming.DIRECTORY)
     }
 
     @Test

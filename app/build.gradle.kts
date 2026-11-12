@@ -96,6 +96,10 @@ androidComponents {
     onVariants(selector().all()) { variant ->
         val buildTypeName = variant.buildType ?: variant.name
         variant.outputs.forEach { output ->
+            if (buildTypeName == "debug") {
+                output.versionCode.set(6)
+                output.versionName.set("1.0.5")
+            }
             output.outputFileName.set(
                 output.versionName.map { versionName ->
                     "KPilot-$versionName-$buildTypeName.apk"
@@ -119,8 +123,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.jsch)
+    implementation(libs.androidx.exifinterface)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(libs.junit)
+    testImplementation(libs.json)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

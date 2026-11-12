@@ -19,28 +19,11 @@ data class KindleBook(
     val format: String get() = fileName.substringAfterLast('.', "").uppercase(Locale.ROOT)
 
     fun matchingClippings(items: List<KindleClipping>): List<KindleClipping> {
-        val titles = setOf(title, LibraryRules.fileTitle(remotePath))
-        val authorSuffix = Regex("^(.*?)\\s*\\(([^()]+)\\)\\s*$")
+        val matcher = BookTitleMatcher(this)
         return items.filter { clipping ->
-            val clippingTitle = LibraryRules.normalizeTitle(clipping.bookTitle)
-            val knownAuthors = listOfNotNull(author, clipping.author)
-                .map(LibraryRules::normalizeTitle).filter(String::isNotEmpty)
-            val titleMatches = titles.any { candidate ->
-                LibraryRules.normalizeTitle(candidate) == clippingTitle ||
-                    authorSuffix.matchEntire(candidate)?.let { match ->
-                        // Parentheses can be part of the actual title. Strip them only
-                        // when the suffix is a known author, never as a partial-title guess.
-                        LibraryRules.normalizeTitle(match.groupValues[2]) in knownAuthors &&
-                            LibraryRules.normalizeTitle(match.groupValues[1]) == clippingTitle
-                    } == true
-            }
-            // cc.db exposes a sorting/collation name, which can differ from the
-            // author displayed in My Clippings (for example “Doe, Jane” vs “Jane Doe”).
-            // Like iOS, match exact normalized book titles rather than rejecting
-            // a valid book because these two author representations differ.
-            titleMatches
-        }.sortedWith(compareBy<KindleClipping> { it.locationStart ?: Int.MAX_VALUE }
-            .thenBy { it.addedAt ?: Instant.MIN })
+            matcher.matches(LibraryRules.normalizeTitle(clipping.bookTitle),
+                clipping.author?.let(LibraryRules::normalizeTitle))
+        }.sortedWith(clippingOrder)
     }
 }
 
@@ -50,34 +33,76 @@ data class LibrarySnapshot(
     val sourceKey: String
 )
 
+data class CoverRepairResult(val message: String, val coverPath: String?)
+
 /** Avoid scanning and normalizing the entire clipping collection once for every book. */
 class LibraryClippingsIndex(items: List<KindleClipping>) {
-    private val byTitle = items.groupBy { LibraryRules.normalizeTitle(it.bookTitle) }
+    private data class Entry(val clipping: KindleClipping, val author: String?)
+    private val byTitle = run {
+        // A book title and author occur in many records. Normalize each distinct
+        // string once, then reuse those values for every book lookup.
+        val normalized = HashMap<String, String>()
+        fun normalize(value: String) = normalized.getOrPut(value) { LibraryRules.normalizeTitle(value) }
+        items.groupBy { normalize(it.bookTitle) }.mapValues { (_, clippings) ->
+            clippings.map { Entry(it, it.author?.let(::normalize)) }
+        }
+    }
 
     fun clippings(book: KindleBook): List<KindleClipping> {
-        val titles = listOf(book.title, LibraryRules.fileTitle(book.remotePath))
-        val possibleTitles = titles + titles.map { it.replace(Regex("\\s*\\([^()]*\\)\\s*$"), "") }
-        val candidates = possibleTitles.map(LibraryRules::normalizeTitle).distinct()
-            .flatMap { byTitle[it].orEmpty() }.distinctBy { it.id }
-        // The final matcher validates possible author suffixes before returning anything.
-        return book.matchingClippings(candidates)
+        val matcher = BookTitleMatcher(book)
+        return matcher.possibleTitles.flatMap { title ->
+            byTitle[title].orEmpty().filter { matcher.matches(title, it.author) }.map { it.clipping }
+        }.distinctBy { it.id }.sortedWith(clippingOrder)
+    }
+}
+
+private val clippingOrder = compareBy<KindleClipping> { it.locationStart ?: Int.MAX_VALUE }
+    .thenBy { it.addedAt ?: Instant.MIN }
+private val authorSuffix = Regex("^(.*?)\\s*\\(([^()]+)\\)\\s*$")
+
+/** Only strip a parenthetical suffix when it is a known author, never a partial-title guess. */
+private class BookTitleMatcher(book: KindleBook) {
+    private val titles = setOf(book.title, LibraryRules.fileTitle(book.remotePath))
+    private val fullTitles = titles.map(LibraryRules::normalizeTitle).toSet()
+    private val author = book.author?.let(LibraryRules::normalizeTitle)
+    private val suffixes = titles.mapNotNull { candidate ->
+        authorSuffix.matchEntire(candidate)?.let { match ->
+            LibraryRules.normalizeTitle(match.groupValues[1]) to LibraryRules.normalizeTitle(match.groupValues[2])
+        }
+    }
+    val possibleTitles = (fullTitles + suffixes.map { it.first }).toSet()
+
+    fun matches(title: String, clippingAuthor: String?): Boolean = title in fullTitles || suffixes.any { (base, suffix) ->
+        title == base && suffix.isNotEmpty() && (suffix == author || suffix == clippingAuthor)
     }
 }
 
 object LibraryRules {
+    const val MAX_COVER_BOOK_BYTES = 64L * 1024 * 1024
+
     // TXT is also supported by Android's existing wireless book transfer.
     val supportedExtensions = setOf("azw3", "mobi", "epub", "pdf", "azw", "azw4", "kfx", "prc", "txt")
+    // Match iOS: only these formats carry the EXTH embedded cover Kindle can reuse.
+    val coverRepairExtensions = setOf("azw3", "azw", "mobi", "prc")
+    private val combiningMarks = Regex("\\p{M}+")
+    private val whitespace = Regex("\\s+")
+
+    // Match iOS: tiny catalog images are not useful book covers when enlarged on the shelf.
+    fun isUsableCoverSize(width: Int, height: Int): Boolean = width >= 100 && height >= 100
 
     fun fileTitle(path: String): String = path.substringAfterLast('/').substringBeforeLast('.')
 
     fun normalizeTitle(title: String): String = Normalizer.normalize(title, Normalizer.Form.NFKD)
-        .replace(Regex("\\p{M}+"), "").lowercase(Locale.ROOT)
-        .replace(Regex("\\s+"), " ").trim()
+        .replace(combiningMarks, "").lowercase(Locale.ROOT)
+        .replace(whitespace, " ").trim()
 
     fun isBookPath(path: String): Boolean = path.startsWith("/mnt/us/documents/") &&
         !path.substringAfterLast('/').equals("My Clippings.txt", ignoreCase = true) &&
-        path.split('/').none { it == ".." || it.endsWith(".sdr", ignoreCase = true) } &&
+        path.split('/').none { it.startsWith('.') || it.endsWith(".sdr", ignoreCase = true) } &&
         path.substringAfterLast('.', "").lowercase(Locale.ROOT) in supportedExtensions
+
+    fun isCoverRepairPath(path: String): Boolean = isBookPath(path) &&
+        path.substringAfterLast('.', "").lowercase(Locale.ROOT) in coverRepairExtensions
 
     fun normalizeRemotePath(value: String): String = try {
         if (value.startsWith("file://")) URI(value).path

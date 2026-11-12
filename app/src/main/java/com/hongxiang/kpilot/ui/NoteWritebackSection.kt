@@ -26,18 +26,19 @@ fun NoteWritebackSection(note: KindleClipping, state: UiState,
     val currentText by rememberUpdatedState(text)
     val currentSource by rememberUpdatedState(source)
     val currentSave by rememberUpdatedState(onSave)
+    val isActive = LocalTabActive.current
     LaunchedEffect(source,state.noteDraftsAvailable) {
         if(text == lastSource) text = source
         lastSource = source
     }
-    LaunchedEffect(text,source,state.noteDraftsAvailable) {
-        if(state.noteDraftsAvailable && text.trim()!=source) { delay(500);onSave(note,text) }
+    LaunchedEffect(text,source,state.noteDraftsAvailable,isActive) {
+        if(isActive && state.noteDraftsAvailable && text.trim()!=source) { delay(500);onSave(note,text) }
     }
-    DisposableEffect(scope,note.id) { onDispose { if(currentText.trim()!=currentSource) currentSave(note,currentText) } }
+    DisposableEffect(scope,note.id,isActive) { onDispose { if(isActive && currentText.trim()!=currentSource) currentSave(note,currentText) } }
     Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
         Text("批注",style=MaterialTheme.typography.titleMedium)
         OutlinedTextField(text,{text=it},modifier=Modifier.fillMaxWidth(),minLines=5,
-            shape=RoundedCornerShape(14.dp),enabled=state.noteDraftsAvailable)
+            shape=RoundedCornerShape(14.dp),enabled=state.noteDraftsAvailable && state.noteWritingId == null)
         if(draft != null) Row(Modifier.fillMaxWidth()) {
             Text(if(draft.text.isBlank()) "已清空" else "已保存",style=MaterialTheme.typography.labelSmall,modifier=Modifier.weight(1f),color=MaterialTheme.colorScheme.onSurfaceVariant)
             if(draft.needsSync) TextButton(onClick={confirmingRestore=true},enabled=state.noteWritingId==null&&!state.noteDraftSaving) { Text("恢复 Kindle 原批注") }
@@ -50,7 +51,14 @@ fun NoteWritebackSection(note: KindleClipping, state: UiState,
             color=if(state.noteWriteError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
         if(!state.noteDraftsAvailable&&!state.noteDraftsLoading) TextButton(onClick=onRetryLoad){Text("重试")}
     }
-    if(confirmingRestore) AlertDialog(onDismissRequest={confirmingRestore=false},title={Text("恢复 Kindle 原批注？")},
-        confirmButton={TextButton(onClick={confirmingRestore=false;text=note.kindleNotes.lastOrNull()?.text.orEmpty();onRestore(note)}){Text("恢复原批注")}},
+    if(isActive && confirmingRestore) AlertDialog(onDismissRequest={confirmingRestore=false},title={Text("恢复 Kindle 原批注？")},
+        confirmButton = {
+            TextButton(onClick = {
+                confirmingRestore = false
+                text = draft?.takeIf { it.syncedRevision != null }?.kindleBaseText
+                    ?: note.kindleNotes.lastOrNull()?.text.orEmpty()
+                onRestore(note)
+            }) { Text("恢复原批注") }
+        },
         dismissButton={TextButton(onClick={confirmingRestore=false}){Text("继续编辑")}})
 }

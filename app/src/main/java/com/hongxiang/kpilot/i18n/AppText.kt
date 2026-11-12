@@ -21,6 +21,9 @@ import androidx.compose.ui.unit.TextUnit
 private fun isChinese(language: String): Boolean = language.equals("zh", ignoreCase = true)
 
 private val chineseToEnglish = mapOf(
+    "含批注" to "Has a note",
+    "添加批注" to "Add a note",
+    "更多操作" to "More actions",
     "暂无传书记录" to "No transfers",
     "书架" to "Books",
     "生词本" to "Vocabulary",
@@ -133,10 +136,100 @@ private val chineseToEnglish = mapOf(
     "读取 Kindle 书库超时" to "Kindle library download timed out",
     "Kindle 书库文件超过允许的大小" to "The Kindle library file exceeds the size limit",
     "书库同步失败，已保留离线书库" to "Library sync failed; the offline library was kept",
+    "修复封面" to "Repair cover",
+    "从书籍提取封面并直接替换 Kindle 书架缩略图（不备份原图）。不修改正文、笔记或阅读进度。Kindle 联网后可能再次覆盖封面，届时可重复修复。" to
+        "Extract the book's cover and replace the Kindle shelf thumbnail directly (the previous image is not backed up). The text, notes and reading progress are not changed. Kindle may overwrite the cover after connecting again; repeat the repair when needed.",
+    "替换封面" to "Replace cover",
+    "正在修复 Kindle 封面…" to "Repairing the Kindle cover…",
+    "正在从书籍提取封面并写入 Kindle…" to "Extracting the cover and writing it to Kindle…",
+    "封面修复失败" to "Cover repair failed",
+    "封面修复完成" to "Cover repair complete",
+    "确定" to "OK",
+    "封面提取仅支持不超过 64 MB 的非空书籍；书籍上传不受影响。" to
+        "Cover extraction supports non-empty books up to 64 MB. Book uploads are unaffected.",
+    "未找到可用的内嵌封面，可能没有封面、格式不兼容或受 DRM 保护。" to
+        "No usable embedded cover was found. The book may have no cover, use an incompatible format, or be DRM-protected.",
+    "无法确定封面标识。请在 Kindle 打开书籍并返回书架，待索引完成后再长按修复。" to
+        "Could not determine the cover identity. Open the book on Kindle, return to the library, wait for indexing, then long-press to repair again.",
+    "写入 Kindle 封面超时" to "Writing the Kindle cover timed out",
+    "下载 Kindle 书籍超时" to "Downloading the Kindle book timed out",
+    "正在提取并写入 Kindle 封面…" to "Extracting and writing the Kindle cover…",
+    "此格式暂不自动写入 Kindle 封面。" to "This format does not support automatic Kindle covers.",
+    "无法读取本地书籍文件" to "Could not read the local book file",
+    "未知原因" to "unknown reason",
+    "从 Kindle 删除" to "Delete from Kindle",
+    "仅删除书籍" to "Delete book only",
+    "删除书籍和阅读记录" to "Delete book and reading data",
+    "仅删除书籍会保留笔记和阅读进度；删除书籍和阅读记录会同时删除笔记和阅读进度，无法在 App 内撤销。" to
+        "Deleting only the book keeps its notes and reading progress. Deleting the book and reading data removes both and cannot be undone in the app.",
+    "正在从 Kindle 删除书籍…" to "Deleting the book from Kindle…",
+    "正在删除 Kindle 上的书籍文件…" to "Deleting the book file on Kindle…",
+    "书籍删除完成" to "Book deleted",
+    "书籍删除失败" to "Book deletion failed",
     "每天重逢一段好文字" to "Rediscover something worth reading",
     "撤销" to "Undo",
     "收藏" to "Favorite",
+    "收藏与隐藏" to "Favorites & Hidden",
+    "取消收藏" to "Remove favorite",
+    "已隐藏" to "Hidden",
+    "恢复回顾" to "Restore to review",
+    "还没有收藏的摘抄" to "No favorited clippings yet",
+    "还没有隐藏的摘抄" to "No hidden clippings yet",
     "下一条" to "Next",
+    "同书笔记" to "Book notes",
+    "查看同书笔记" to "Browse notes from this book",
+    "回到当前笔记" to "Return to current note",
+    "回顾" to "Review",
+    "遇见一条过去的摘抄" to "Revisit a passage from your past",
+    "没有可回顾的摘抄" to "No clippings to review",
+    "恢复隐藏的摘抄，或同步更多 Kindle 笔记后再试。" to "Restore hidden clippings, or sync more Kindle notes.",
+    "隐藏" to "Hide",
+    "新词" to "New",
+    "学习中" to "Learning",
+    "待复习" to "Review",
+    "重新学习" to "Relearning",
+    "当前复习已完成" to "Review complete",
+    "稍后继续学习" to "Continue later",
+    "还有学习中的单词，将在到期后自动出现。" to "Some words are still being learned; they will appear when due.",
+    "当前没有可学的单词，跳过的单词下次打开时会重新加入。" to "No words to study right now; skipped words will return next time.",
+    "新词和当前到期的单词已学完，可以休息了。" to "New and due words are finished. Take a break.",
+    "先休息" to "Rest",
+    "先在心里回忆词义，再显示答案" to "Recall the meaning, then reveal the answer",
+    "还没有释义，可以稍后在生词详情中补充。" to "No definition yet; add one later in the word details.",
+    "上下文" to "Context",
+    "忘记" to "Again",
+    "困难" to "Hard",
+    "记得" to "Good",
+    "简单" to "Easy",
+    "显示答案" to "Show answer",
+    "稍后再学" to "Skip for now",
+    "撤销上次评分" to "Undo last rating",
+    "已有释义" to "Has a definition",
+    "释义" to "Definition",
+    "系统词典" to "System dictionary",
+    "还没有释义，可以在这里补充" to "No definition yet. Add one here.",
+    "保存释义" to "Save definition",
+    "桌面小组件" to "Home screen widget",
+    "每日收藏" to "Daily favorite",
+    "小组件样式" to "Widget style",
+    "纸面风" to "Paper",
+    "终端风" to "Terminal",
+    "添加到桌面" to "Add to home screen",
+    "请在系统提示中确认添加" to "Confirm adding the widget in the system prompt",
+    "当前桌面不支持直接添加小组件" to "This launcher cannot add widgets directly",
+    "长按主屏幕，添加 KPilot「每日收藏」小组件。请先在摘抄中收藏笔记。" to "Long-press the home screen and add the KPilot “Daily favorite” widget. Favorite a note in Clippings first.",
+    "小组件每天自动更换一条收藏；点右下角箭头可立即切换。" to "The widget rotates to another favorite each day; tap the arrow to switch now.",
+    "回顾数据已同步" to "Review data synced",
+    "回顾数据同步失败，已保留本地数据" to "Review data sync failed; local data was kept",
+    "无法获取 Kindle 回顾数据锁，请稍后重试" to "Could not lock Kindle review data; try again later",
+    "无法获取 Kindle 回顾数据锁" to "Could not lock Kindle review data",
+    "同步 Kindle 回顾数据超时" to "Kindle review data sync timed out",
+    "写入 Kindle 回顾数据超时" to "Writing Kindle review data timed out",
+    "Kindle 回顾数据过大，无法写入" to "Kindle review data is too large to write",
+    "回顾数据写入校验失败，请稍后重试" to "Review data verification failed; try again later",
+    "Kindle 回顾数据文件超过允许的大小" to "The Kindle review data file exceeds the size limit",
+    "Kindle 回顾数据文件格式无效，未写入" to "The Kindle review data file is invalid and was not written",
+    "Kindle 回顾数据文件版本过新，请先更新应用，未写入" to "The Kindle review data file is from a newer app version; update the app first. Nothing was written",
     "不再复习" to "Exclude from review",
     "左滑收藏，右滑不再复习，上滑下一条" to "Swipe left to favorite, right to exclude, or up for next",
     "左右滑动收藏或不再复习，点击下一条继续" to "Swipe left to favorite or right to exclude. Tap Next to continue.",
@@ -173,6 +266,21 @@ private val chineseToEnglish = mapOf(
     "已恢复同步时的 Kindle 批注" to "Restored the last synced Kindle note",
     "无法恢复原批注" to "Could not restore the original note",
     "正在写入 Kindle 批注…" to "Writing the Kindle note…",
+    "正在同步批注…" to "Syncing notes…",
+    "同步批注" to "Sync notes",
+    "处理冲突" to "Review conflicts",
+    "保留手机" to "Keep phone",
+    "保留 Kindle" to "Keep Kindle",
+    "稍后处理" to "Review later",
+    "手机" to "Phone",
+    "无批注" to "No note",
+    "这条草稿缺少原批注版本，请选择要保留的内容。" to "This draft has no original version. Choose which note to keep.",
+    "找不到这条草稿对应的划线" to "The highlight for this draft could not be found",
+    "无法同步这条批注" to "Could not sync this note",
+    "本机摘抄缓存更新失败，请重新同步摘抄" to "Could not update the local clippings. Sync clippings again.",
+    "无法确定这条 Kindle 批注的位置，已保留草稿" to "The Kindle note position could not be verified. The draft was kept.",
+    "这条 Kindle 批注可能属于多条划线，无法安全同步" to "The Kindle note may belong to several highlights and could not be synced.",
+    "这条划线有多条 Kindle 批注，无法安全同步" to "The highlight has several Kindle notes and could not be synced.",
     "已删除 Kindle 批注，划线保留" to "Kindle note deleted; the highlight was kept",
     "批注已写入 Kindle，本地副本已保留" to "Note written to Kindle; the local copy was kept",
     "写入失败，本地草稿已保留" to "Write failed; the local draft was kept",
@@ -220,6 +328,8 @@ private val chineseToEnglish = mapOf(
     "摘抄详情" to "Clipping details",
     "返回" to "Back",
     "搜索摘抄" to "Search clippings",
+    "清除搜索" to "Clear search",
+    "取消搜索" to "Cancel search",
     "同步摘抄" to "Sync clippings",
     "导出摘抄" to "Export clippings",
     "搜索生词" to "Search vocabulary",
@@ -452,6 +562,9 @@ private val englishToChinese = chineseToEnglish.entries.associate { (zh, en) -> 
 private fun dynamicEnglish(value: String): String? {
     fun replace(pattern: String, replacement: (MatchResult) -> String): String? =
         Regex(pattern).matchEntire(value)?.let(replacement)
+    if ('\n' in value && Regex("^((已同步 )?\\d+ 条|本机摘抄缓存更新失败)").containsMatchIn(value)) {
+        return value.lines().joinToString("\n") { localizeAppText(it, "en") }
+    }
     return replace("^(\\d+) 条$", { "${it.groupValues[1]} items" })
         ?: replace("^(\\d+) 项$", { "${it.groupValues[1]} items" })
         ?: replace("^(\\d+) 本$", { "${it.groupValues[1]} books" })
@@ -465,17 +578,53 @@ private fun dynamicEnglish(value: String): String? {
         ?: replace("^已收藏 (\\d+) 条$", { "${it.groupValues[1]} favorites" })
         ?: replace("^恢复不再复习的摘抄（(\\d+) 条）$", { "Restore excluded clippings (${it.groupValues[1]})" })
         ?: replace("^读取 Kindle 书库失败 \\((.+)\\)$", { "Kindle library download failed (${it.groupValues[1]})" })
+        ?: replace("^下载 Kindle 书籍失败 \\((.+)\\)$", { "Kindle book download failed (${it.groupValues[1]})" })
+        ?: replace("^写入 Kindle 封面失败 \\((.+)\\)$", { "Kindle cover write failed (${it.groupValues[1]})" })
+        ?: replace("^修复“(.+)”的 Kindle 封面？$", { "Repair the Kindle cover of “${it.groupValues[1]}”?" })
+        ?: replace("^正在修复“(.+)”的 Kindle 封面…$", { "Repairing the Kindle cover of “${it.groupValues[1]}”…" })
+        ?: replace("^拒绝操作不安全的 Kindle 路径：(.+)$", { "Refused an unsafe Kindle path: ${it.groupValues[1]}" })
+        ?: replace("^封面已写入并校验。请返回 Kindle 书架查看；若联网后被覆盖，可再次长按修复。$", {
+            "The cover was written and verified. Return to the Kindle library to check it. If it is overwritten after connecting to the network, long-press to repair again."
+        })
+        ?: replace("^封面写入后校验不一致，可能已被 Kindle 覆盖，请稍后重试。$", {
+            "The cover verification failed after writing; Kindle may have overwritten it. Try again later."
+        })
+        ?: replace("^封面已写入并校验，但恢复副本保存失败：(.+)。$", {
+            "The cover was written and verified, but saving the recovery copy failed: ${localizeAppText(it.groupValues[1], "en")}."
+        })
+        ?: replace("^(.+) 已上传，正在补充封面…$", { "${it.groupValues[1]} uploaded; adding the Kindle cover…" })
+        ?: replace("^书籍已上传；封面未完成：(.+)$", {
+            "The book was uploaded, but its cover was not completed: ${localizeAppText(it.groupValues[1], "en")}"
+        })
+        ?: replace("^从 Kindle 删除“(.+)”？$", { "Delete “${it.groupValues[1]}” from Kindle?" })
+        ?: replace("^正在从 Kindle 删除“(.+)”…$", { "Deleting “${it.groupValues[1]}” from Kindle…" })
+        ?: replace("^已从 Kindle 删除“(.+)”，阅读记录已同时删除。$", {
+            "Deleted “${it.groupValues[1]}” from Kindle; its reading data was also deleted."
+        })
+        ?: replace("^已从 Kindle 删除“(.+)”，笔记和阅读进度仍保留。$", {
+            "Deleted “${it.groupValues[1]}” from Kindle; its notes and reading progress were kept."
+        })
         ?: replace("^Kindle 笔记操作失败（(.+)）$", { "Kindle note operation failed (${it.groupValues[1]})" })
         ?: replace("^(.+)；自动恢复备份失败，请保留草稿。Kindle 备份：(.+)$", {
             "${localizeAppText(it.groupValues[1], "en")}; backup recovery failed. Keep the draft. Kindle backups: ${it.groupValues[2]}"
         })
         ?: replace("^(\\d+) 个单词$", { "${it.groupValues[1]} words" })
-        ?: replace("^(\\d+) 次$", { "${it.groupValues[1]} lookups" })
+        ?: replace("^(\\d+) 次$", {
+            val count = it.groupValues[1]
+            "$count ${if (count == "1") "lookup" else "lookups"}"
+        })
         ?: replace("^(\\d+) 条笔记$", { "${it.groupValues[1]} notes" })
         ?: replace("^发送 (\\d+) 本到 Kindle$", { "Send ${it.groupValues[1]} to Kindle" })
         ?: replace("^已跳过 (\\d+) 个不支持的文件$", { "Skipped ${it.groupValues[1]} unsupported files" })
         ?: replace("^(\\d+) 个文件等待发送$", { "${it.groupValues[1]} files ready to send" })
         ?: replace("^正在依次发送 (\\d+) 个文件$", { "Sending ${it.groupValues[1]} files in order" })
+        ?: replace("^(\\d+) 条批注待同步$", { "${it.groupValues[1]} notes to sync" })
+        ?: replace("^批注待确认（(\\d+) 条）$", { "Review notes (${it.groupValues[1]})" })
+        ?: replace("^已同步 (\\d+) 条$", { "Synced ${it.groupValues[1]} notes" })
+        ?: replace("^(\\d+) 条待确认$", { "${it.groupValues[1]} notes to review" })
+        ?: replace("^(\\d+) 条同步失败：(.+)$", {
+            "${it.groupValues[1]} notes could not sync. ${localizeAppText(it.groupValues[2], "en")}"
+        })
         ?: replace("^已同步 (\\d+) 条摘抄$", { "Synced ${it.groupValues[1]} clippings" })
         ?: replace("^已载入 (\\d+) 条摘抄$", { "Loaded ${it.groupValues[1]} clippings" })
         ?: replace("^已同步 (\\d+) 个生词$", { "Synced ${it.groupValues[1]} words" })
@@ -502,6 +651,21 @@ private fun dynamicEnglish(value: String): String? {
         ?: replace("^阶段：(.+)$", { "Stage: ${it.groupValues[1]}" })
         ?: replace("^添加时间  (.+)$", { "Added  ${it.groupValues[1]}" })
         ?: replace("^(.+) 与 Kindle 中的文件匹配。是否覆盖？$", { "${it.groupValues[1]} matches a file on Kindle. Overwrite it?" })
+        ?: replace("^今天已回顾 (\\d+) 条$", { "Reviewed ${it.groupValues[1]} today" })
+        ?: replace("^今日 (\\d+)$", { "Today ${it.groupValues[1]}" })
+        ?: replace("^恢复不再回顾的摘抄（(\\d+) 条）$", { "Restore excluded clippings (${it.groupValues[1]})" })
+        ?: replace("^新词 (\\d+) · 学习中 (\\d+) · 待复习 (\\d+)$", {
+            "New ${it.groupValues[1]} · Learning ${it.groupValues[2]} · Due ${it.groupValues[3]}"
+        })
+        ?: replace("^原形：(.+)$", { "Base form: ${it.groupValues[1]}" })
+        ?: replace("^(\\d+) 秒后$", { "in ${it.groupValues[1]} sec" })
+        ?: replace("^(\\d+) 分钟后$", { "in ${it.groupValues[1]} min" })
+        ?: replace("^(\\d+) 小时后$", { "in ${it.groupValues[1]} hr" })
+        ?: replace("^(\\d+) 天$", { "${it.groupValues[1]} days" })
+        ?: replace("^(\\d+) 秒$", { "${it.groupValues[1]} sec" })
+        ?: replace("^(\\d+) 分钟$", { "${it.groupValues[1]} min" })
+        ?: replace("^同步 Kindle 回顾数据失败 \\((.+)\\)$", { "Kindle review data sync failed (${it.groupValues[1]})" })
+        ?: replace("^写入 Kindle 回顾数据失败 \\((.+)\\)$", { "Writing Kindle review data failed (${it.groupValues[1]})" })
         ?: replace("^位置 (.+)$", { "Location ${it.groupValues[1]}" })
         ?: replace("^页 (.+)$", { "Page ${it.groupValues[1]}" })
         ?: replace("^问题反馈、使用交流与版本通知\\nQQ群：(\\d+)$", { "Feedback, community help, and release news\nQQ group: ${it.groupValues[1]}" })
@@ -513,7 +677,7 @@ private fun dynamicChinese(value: String): String? {
     return replace("^Connected to (.+)$", { "已连接到 ${it.groupValues[1]}" })
         ?: replace("^(\\d+) items$", { "${it.groupValues[1]} 条" })
         ?: replace("^(\\d+) words$", { "${it.groupValues[1]} 个单词" })
-        ?: replace("^(\\d+) lookups$", { "${it.groupValues[1]} 次" })
+        ?: replace("^(\\d+) lookups?$", { "${it.groupValues[1]} 次" })
         ?: replace("^Exported to (.+)$", { "已导出至 ${it.groupValues[1]}" })
 }
 

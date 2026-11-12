@@ -62,7 +62,8 @@ internal class KindleReaderDataStore(val values: MutableList<KrdsValue>) {
         existingTexts: Set<String>,
         text: String,
         time: Long,
-        atHighlightEnd: Boolean
+        atHighlightEnd: Boolean,
+        verifiedNotes: List<SidecarAnnotation>? = null
     ): SidecarAnnotation? {
         val cache = cache() ?: error("Kindle sidecar 没有标注缓存")
         val groups = groups(cache)
@@ -74,8 +75,9 @@ internal class KindleReaderDataStore(val values: MutableList<KrdsValue>) {
             require(count in 0 until tree.values.size) { "Kindle 笔记数量无效" }
             (1..count).filter { index ->
                 val note = decodeAnnotation(NOTE, tree.values[index].objectValue())
-                (note.startPosition == start && note.endPosition == end) ||
-                    (note.note in existingTexts && overlaps(note, highlight))
+                if (verifiedNotes != null) note in verifiedNotes else
+                    (note.startPosition == start && note.endPosition == end) ||
+                        (note.note in existingTexts && overlaps(note, highlight))
             }
         }.orEmpty()
         if (text.isEmpty()) {

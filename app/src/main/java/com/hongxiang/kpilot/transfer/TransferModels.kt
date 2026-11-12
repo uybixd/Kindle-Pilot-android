@@ -17,7 +17,9 @@ data class TransferItem(
     val status: TransferStatus = TransferStatus.READY,
     val bytesSent: Long = 0,
     val error: String? = null,
-    val remotePath: String? = null
+    val remotePath: String? = null,
+    val coverMessage: String? = null,
+    val coverNeedsAttention: Boolean = false
 ) {
     val progress: Float
         get() = when {
@@ -53,7 +55,7 @@ object SupportedTransferTypes {
 }
 
 object RemoteDocumentNaming {
-    const val DIRECTORY = "/mnt/us/documents"
+    const val DIRECTORY = "/mnt/us/documents/Downloads/Items01"
 
     fun safeFileName(name: String): String {
         val leaf = name.substringAfterLast('/').substringAfterLast('\\').trim()
@@ -97,6 +99,9 @@ object TransferQueueRules {
     fun canRetry(status: TransferStatus): Boolean = status in setOf(TransferStatus.FAILED, TransferStatus.SKIPPED)
     fun retry(item: TransferItem): TransferItem {
         require(canRetry(item.status))
-        return item.copy(status = TransferStatus.READY, bytesSent = 0, error = null, remotePath = null)
+        return item.copy(
+            status = TransferStatus.READY, bytesSent = 0, error = null, remotePath = null,
+            coverMessage = null, coverNeedsAttention = false
+        )
     }
 }

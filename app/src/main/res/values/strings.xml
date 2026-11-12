@@ -1,4 +1,12 @@
 <resources>
     <string name="app_name">KPilot</string>
+    <string name="widget_daily_favorite_label">Daily favorite</string>
+    <string name="widget_daily_favorite_description">Revisit one favorite note every day.</string>
+    <string name="widget_next_favorite">Next favorite</string>
+    <string name="widget_terminal_prompt" translatable="false">$ %1$s</string>
+    <string name="widget_terminal_date" translatable="false"># %1$s</string>
+    <string name="widget_empty_book">Favorite a note in KPilot</string>
+    <string name="widget_empty_text">Keep a favorite line on your home screen</string>
+    <string name="widget_preview_text">A favorite line, with you every day.</string>
     <string name="remote_accessibility_description">Optionally intercepts hardware volume keys and keyboard arrow keys to turn Kindle pages when their mappings are enabled. It does not read screen content or accessibility events.</string>
 </resources>

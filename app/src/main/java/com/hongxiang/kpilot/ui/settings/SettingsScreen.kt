@@ -1,8 +1,13 @@
 package com.hongxiang.kpilot.ui.settings
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
+import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,26 +24,50 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.hongxiang.kpilot.MainViewModel
 import com.hongxiang.kpilot.UiState
 import com.hongxiang.kpilot.data.NavigationItem
 import com.hongxiang.kpilot.i18n.AppText as Text
 import com.hongxiang.kpilot.i18n.localizedText
+import com.hongxiang.kpilot.notes.KindleClipping
 import com.hongxiang.kpilot.support.SupportKPilotEntry
+import com.hongxiang.kpilot.ui.LocalTabActive
+import com.hongxiang.kpilot.widget.FavoriteWidgetCard
+import com.hongxiang.kpilot.widget.FavoriteWidgetNote
+import com.hongxiang.kpilot.widget.FavoriteWidgetProvider
+import com.hongxiang.kpilot.widget.FavoriteWidgetSelection
+import com.hongxiang.kpilot.widget.FavoriteWidgetSize
+import com.hongxiang.kpilot.widget.FavoriteWidgetStore
+import com.hongxiang.kpilot.widget.FavoriteWidgetStyle
+import com.hongxiang.kpilot.widget.widgetFavorites
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private enum class Page(val title: String) { HOME("设置"), CONNECTION("Kindle 连接"), NAVIGATION("底部导航栏"), LOCAL("本地数据"), ABOUT("关于") }
+private enum class Page(val title: String) {
+    HOME("设置"), CONNECTION("Kindle 连接"), NAVIGATION("底部导航栏"), LOCAL("本地数据"),
+    REVIEW("收藏与隐藏"), WIDGET("桌面小组件"), ABOUT("关于")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
+fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenClipping: (KindleClipping) -> Unit) {
+    val isActive = LocalTabActive.current
     var page by rememberSaveable { mutableStateOf(Page.HOME) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     var profilesExpanded by remember { mutableStateOf(false) }
@@ -49,13 +78,19 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
     val exporting = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> uri?.let(viewModel::exportLocalBackup) }
     val busy = state.connectionBusy || state.localDataBusy || state.busy || state.notesSyncing || state.vocabularySyncing || state.librarySyncing || state.noteWritingId != null || state.noteDraftSaving
     val context = LocalContext.current
-    BackHandler(page != Page.HOME) { page = Page.HOME }
+    val back = { page = if (page == Page.REVIEW) Page.LOCAL else Page.HOME }
+    BackHandler(isActive && page != Page.HOME, onBack = back)
     Scaffold(contentWindowInsets = WindowInsets(0,0,0,0), containerColor = MaterialTheme.colorScheme.background, topBar = {
         TopAppBar(title = { Text(page.title) }, navigationIcon = {
-            if (page != Page.HOME) IconButton(onClick = { page = Page.HOME }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, localizedText("返回")) }
+            if (page != Page.HOME) IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, localizedText("返回")) }
         })
     }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        val scroll = rememberScrollState()
+        val content = Modifier.padding(padding).fillMaxSize()
+        Column(
+            content.then(if (page == Page.REVIEW) Modifier else Modifier.verticalScroll(scroll)).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
             when(page) {
                 Page.HOME -> {
                     Group {
@@ -66,6 +101,7 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
                         Entry("底部导航栏", Icons.Filled.ViewAgenda, onClick = { page = Page.NAVIGATION })
                         HorizontalDivider(); Entry("本地数据", Icons.Filled.Storage, onClick = { page = Page.LOCAL })
                     }
+                    Group { Entry("桌面小组件", Icons.Filled.Widgets, subtitle = "每日收藏", onClick = { page = Page.WIDGET }) }
                     Group { Entry("关于",Icons.Filled.Info, onClick = { page = Page.ABOUT }) }
                     Group { SupportKPilotEntry(compact = true) }
                 }
@@ -73,17 +109,17 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
                     Group("当前 Kindle") {
                         Box {
                             Entry("当前 Kindle", Icons.Filled.Tablet, value = state.profiles.firstOrNull { it.id == state.activeProfileId }?.name ?: "Kindle", onClick = { if(!busy) profilesExpanded = true })
-                            DropdownMenu(expanded = profilesExpanded, onDismissRequest = { profilesExpanded = false }) {
+                            DropdownMenu(expanded = isActive && profilesExpanded, onDismissRequest = { profilesExpanded = false }) {
                                 state.profiles.forEach { profile -> DropdownMenuItem(text={ Text(profile.name) }, onClick={profilesExpanded=false;viewModel.selectProfile(profile.id)}) }
                             }
                         }
                         Field("配置名称",state.profiles.firstOrNull { it.id == state.activeProfileId }?.name.orEmpty(),!busy,viewModel::renameProfile)
-                        Field("IP 地址",state.settings.host,!busy,{viewModel.updateSettings(state.settings.copy(host=it.trim()))})
+                        Field("IP 地址",state.settings.host,!busy,{viewModel.updateSettings(state.settings.copy(host=it.trim(), kindleId=""))})
                         Field("SSH 密码",state.settings.password,!busy,{viewModel.updateSettings(state.settings.copy(password=it))},password=true)
                         Entry("高级设置",Icons.Filled.Tune,onClick={advanced=!advanced})
                         if(advanced) {
-                            Field("用户名",state.settings.username,!busy,{viewModel.updateSettings(state.settings.copy(username=it.trim()))})
-                            Field("端口",state.settings.port.toString(),!busy,{text->text.toIntOrNull()?.let{viewModel.updateSettings(state.settings.copy(port=it))}},number=true)
+                            Field("用户名",state.settings.username,!busy,{viewModel.updateSettings(state.settings.copy(username=it.trim(), kindleId=""))})
+                            Field("端口",state.settings.port.toString(),!busy,{text->text.toIntOrNull()?.let{viewModel.updateSettings(state.settings.copy(port=it, kindleId=""))}},number=true)
                             Field("触控设备（自动识别）",state.settings.eventDevice,!busy,{viewModel.updateSettings(state.settings.copy(eventDevice=it.trim()))})
                             TextButton(onClick=viewModel::forgetHostKeys,enabled=!busy,modifier=Modifier.padding(horizontal=8.dp)) { Text("清除已记录的主机密钥",color=MaterialTheme.colorScheme.error) }
                         }
@@ -105,6 +141,9 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
                         HorizontalDivider();Action("导入生词数据库",Icons.Filled.Spellcheck,!busy){importVocabulary=true;importing.launch(arrayOf("*/*"))}
                         HorizontalDivider();Action("导出本机资料库备份",Icons.Filled.IosShare,!busy){exporting.launch("KPilot-library-backup.zip")}
                     }
+                    Group {
+                        Entry("收藏与隐藏", Icons.Filled.Bookmark, onClick = { page = Page.REVIEW })
+                    }
                     Group("资料库状态") {
                         Value("待保存更改", "${state.noteDrafts.values.count{it.needsSync}} 项")
                         HorizontalDivider();Value("本机资料库",if(state.localDataBusy) "处理中" else "已保存")
@@ -117,6 +156,74 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
                     if(state.localDataBusy) CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).size(24.dp))
                     if(state.localDataMessage.isNotBlank()) Text(state.localDataMessage,color=if(state.localDataError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,modifier=Modifier.padding(horizontal=12.dp))
                 }
+                Page.REVIEW -> ClippingReviewSettings(
+                    clippings = state.notes,
+                    records = state.clippingReviewRecords,
+                    enabled = !state.localDataBusy,
+                    onOpenClipping = onOpenClipping,
+                    onRemoveFavorite = viewModel::removeClippingReviewFavorite,
+                    onRestoreHidden = viewModel::restoreExcludedReviewClipping
+                )
+                Page.WIDGET -> {
+                    val manager = remember(context) { AppWidgetManager.getInstance(context) }
+                    val provider = remember(context) {
+                        ComponentName(context, FavoriteWidgetProvider::class.java)
+                    }
+                    val unsupported = localizedText("当前桌面不支持直接添加小组件")
+                    val confirm = localizedText("请在系统提示中确认添加")
+                    var style by remember(context) { mutableStateOf(FavoriteWidgetStore(context).style) }
+                    val preview = previewFavorite(state, isActive)
+                    Group("小组件样式") {
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(12.dp)) {
+                            FavoriteWidgetStyle.entries.forEachIndexed { index, option ->
+                                SegmentedButton(
+                                    selected = style == option,
+                                    onClick = {
+                                        style = option
+                                        viewModel.setFavoriteWidgetStyle(option)
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(index, FavoriteWidgetStyle.entries.size)
+                                ) { Text(option.label) }
+                            }
+                        }
+                    }
+                    Group("每日收藏") {
+                        FavoriteWidgetPreview(preview, style, Modifier.padding(16.dp))
+                    }
+                    Group {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                "长按主屏幕，添加 KPilot「每日收藏」小组件。请先在摘抄中收藏笔记。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "小组件每天自动更换一条收藏；点右下角箭头可立即切换。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Group {
+                        Action("添加到桌面", Icons.Filled.Add, true) {
+                            val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                                manager.isRequestPinAppWidgetSupported
+                            if (supported) {
+                                val requested = manager.requestPinAppWidget(provider, null, null)
+                                Toast.makeText(
+                                    context,
+                                    if (requested) confirm else unsupported,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                Toast.makeText(context, unsupported, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
                 Page.ABOUT -> Group {
                     Value("KPilot","Android")
                     HorizontalDivider();Value("版本",remember { context.packageManager.getPackageInfo(context.packageName,0).versionName.orEmpty() })
@@ -125,8 +232,57 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState) {
             }
         }
     }
-    if(confirmingClear) AlertDialog(onDismissRequest={confirmingClear=false},title={Text("清除所有本地数据？")},text={Text("仅清除本机资料，Kindle 上的数据不变。")},confirmButton={TextButton(onClick={confirmingClear=false;viewModel.clearLocalData()}){Text("清除",color=MaterialTheme.colorScheme.error)}},dismissButton={TextButton(onClick={confirmingClear=false}){Text("取消")}})
-    if(confirmingRemove) AlertDialog(onDismissRequest={confirmingRemove=false},title={Text("删除当前配置？")},confirmButton={TextButton(onClick={confirmingRemove=false;viewModel.removeProfile()}){Text("删除")}},dismissButton={TextButton(onClick={confirmingRemove=false}){Text("取消")}})
+    if(isActive && confirmingClear) AlertDialog(onDismissRequest={confirmingClear=false},title={Text("清除所有本地数据？")},text={Text("仅清除本机资料，Kindle 上的数据不变。")},confirmButton={TextButton(onClick={confirmingClear=false;viewModel.clearLocalData()}){Text("清除",color=MaterialTheme.colorScheme.error)}},dismissButton={TextButton(onClick={confirmingClear=false}){Text("取消")}})
+    if(isActive && confirmingRemove) AlertDialog(onDismissRequest={confirmingRemove=false},title={Text("删除当前配置？")},confirmButton={TextButton(onClick={confirmingRemove=false;viewModel.removeProfile()}){Text("删除")}},dismissButton={TextButton(onClick={confirmingRemove=false}){Text("取消")}})
+}
+
+@Composable
+private fun previewFavorite(state: UiState, isActive: Boolean): FavoriteWidgetNote? {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val selection by produceState(LocalDate.now() to 0L, context, lifecycle, isActive) {
+        if (isActive) lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            value = withContext(Dispatchers.IO) {
+                LocalDate.now() to FavoriteWidgetStore(context).offset()
+            }
+        }
+    }
+    val favorites = remember(state.notes, state.clippingReviewRecords) {
+        widgetFavorites(state.notes, state.clippingReviewRecords).sortedBy { it.id }
+    }
+    return FavoriteWidgetSelection.note(favorites, selection.first, selection.second)
+}
+
+@Composable
+private fun FavoriteWidgetPreview(note: FavoriteWidgetNote?, style: FavoriteWidgetStyle, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val defaultSize = FavoriteWidgetCard.defaultSize
+    BoxWithConstraints(modifier.fillMaxWidth().aspectRatio(defaultSize.width / defaultSize.height)) {
+        val width = constraints.maxWidth
+        val height = constraints.maxHeight
+        if (width > 0 && height > 0) {
+            val size = FavoriteWidgetSize.forDimensions(maxWidth.value, maxHeight.value)
+            val card = remember(context, configuration, note, style, size, width, height) {
+                FavoriteWidgetCard.render(context, note, style, size, width, height)
+            }
+            Image(
+                bitmap = card.bitmap.asImageBitmap(),
+                contentDescription = card.description,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds
+            )
+            if (note != null) {
+                Image(
+                    painter = painterResource(style.nextIcon),
+                    contentDescription = null,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(size.paddingDp.dp)
+                        .size(size.nextSizeDp.dp)
+                )
+            }
+        }
+    }
 }
 
 @Composable private fun Group(title:String?=null,content:@Composable ColumnScope.()->Unit) {

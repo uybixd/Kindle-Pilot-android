@@ -57,7 +57,7 @@ class ClippingsSyncService(context: Context) {
                     error
                 )
             }
-            parseCache(cacheFile, Instant.now())
+            parseCache(cacheFile, Instant.now(), includeSourceHighlights = true)
         }
     } catch (error: NotesSyncException) {
         throw error
@@ -69,7 +69,31 @@ class ClippingsSyncService(context: Context) {
 
     fun loadCached(settings: ConnectionSettings): ClippingsSnapshot? {
         val file = cacheFile(settings)
-        return if (file.isFile) parseCache(file, Instant.ofEpochMilli(file.lastModified())) else null
+        return if (file.isFile) parseCache(file, Instant.ofEpochMilli(file.lastModified()), highlightStates(settings)) else null
+    }
+
+    private fun removedFile(settings: ConnectionSettings) = cacheFile(settings).resolveSibling("removed-highlights")
+
+    private fun highlightStates(settings: ConnectionSettings): Map<String, Boolean> {
+        val file = removedFile(settings)
+        if (!file.isFile) return emptyMap()
+        return file.readLines().filter { it.isNotBlank() }.associate { line ->
+            line.removePrefix("+") to line.startsWith("+")
+        }
+    }
+
+    internal fun rememberRemovedHighlights(settings: ConnectionSettings, checked: Set<String>, removed: Set<String>) {
+        val existing = highlightStates(settings)
+        val updated = existing + checked.associateWith { it !in removed }
+        if (updated != existing) AtomicCache.write(removedFile(settings)) { output ->
+            output.write(updated.toSortedMap().entries.joinToString("\n") { (id, present) ->
+                if (present) "+$id" else id
+            }.toByteArray())
+        }
+    }
+
+    internal fun hideRemovedHighlights(settings: ConnectionSettings, snapshot: ClippingsSnapshot): ClippingsSnapshot {
+        return parseCache(cacheFile(settings), snapshot.syncedAt, highlightStates(settings))
     }
 
     fun importWrittenBytes(settings: ConnectionSettings, bytes: ByteArray): ClippingsSnapshot {
@@ -77,18 +101,29 @@ class ClippingsSyncService(context: Context) {
         AtomicCache.writeValidated(file, { it.write(bytes) }, { temporary ->
             check(ClippingsValidation.inspect(temporary.readBytes()).second == null) { "写回后的摘抄缓存格式无效" }
         })
-        return parseCache(file, Instant.now())
+        return parseCache(file, Instant.now(), highlightStates(settings))
     }
 
-    private fun parseCache(cacheFile: java.io.File, syncedAt: Instant): ClippingsSnapshot {
+    private fun parseCache(
+        cacheFile: java.io.File,
+        syncedAt: Instant,
+        states: Map<String, Boolean> = emptyMap(),
+        includeSourceHighlights: Boolean = false
+    ): ClippingsSnapshot {
         val bytes = cacheFile.readBytes()
-        val result = ClippingsParser.parseDetailed(ClippingsTextDecoder.decode(bytes))
+        val result = ClippingsParser.parseDetailed(
+            ClippingsTextDecoder.decode(bytes),
+            states.filterValues { !it }.keys,
+            states.filterValues { it }.keys,
+            includeSourceHighlights
+        )
         return ClippingsSnapshot(
             items = result.items,
             syncedAt = syncedAt,
             sourceBytes = bytes.size.toLong(),
             filteredDuplicateCount = result.filteredDuplicateCount,
-            filteredSingleSelectionCount = result.filteredSingleSelectionCount
+            filteredSingleSelectionCount = result.filteredSingleSelectionCount,
+            sourceHighlights = result.sourceHighlights
         )
     }
 

@@ -5,20 +5,51 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.DataOutputStream
 
 class NoteDraftStoreTest {
     @get:Rule val temporary = TemporaryFolder()
     private val scope = "a".repeat(64)
 
+    @Test fun verifiedExportTextRemainsTheBaselineAfterAnOfflineEdit() {
+        val verified = rememberKindleNoteBaseline("id", null, "What about now.", true)!!
+        val store = NoteDraftStore(temporary.newFolder())
+        store.save(scope, mapOf("id" to verified))
+        val saved = store.load(scope).getValue("id")
+        val edited = stageNoteDraft("id", saved, "改改改", hasKindleNote = true, writeInFlight = false)!!
+        assertEquals("What about now.", edited.kindleBaseText)
+        assertTrue(edited.needsSync)
+        assertEquals(edited, rememberKindleNoteBaseline("id", edited, "new Kindle text", true))
+    }
+
     @Test fun savedDraftsAndDeletionMarkersSurviveRestartAndRemainDeviceScoped() {
         val directory = temporary.newFolder()
         val store = NoteDraftStore(directory)
-        val drafts = mapOf("highlight" to NoteDraft("highlight", "中文批注 📚\nsecond line"),
-            "cleared" to NoteDraft("cleared", "", "revision", "revision"))
+        val drafts = mapOf("highlight" to NoteDraft("highlight", "中文批注 📚\nsecond line", kindleBaseText = ""),
+            "cleared" to NoteDraft("cleared", "", "revision", "revision", "先前的批注"))
         store.save(scope, drafts)
         assertEquals(drafts, NoteDraftStore(directory).load(scope))
         assertTrue(store.load("b".repeat(64)).isEmpty())
         assertFalse(store.load(scope).getValue("cleared").needsSync)
+    }
+
+    @Test fun versionOneDraftLoadsWithoutInventingABaseline() {
+        val directory = temporary.newFolder()
+        DataOutputStream(directory.resolve("$scope.dat").outputStream()).use {
+            it.writeInt(0x4B504E44)
+            it.writeInt(1)
+            it.writeInt(1)
+            it.writeUTF("id")
+            it.writeUTF("revision")
+            it.writeUTF("")
+            it.writeInt(6)
+            it.writeBytes("legacy")
+        }
+        val store = NoteDraftStore(directory)
+        val drafts = store.load(scope)
+        assertEquals(NoteDraft("id", "legacy", "revision"), drafts.getValue("id"))
+        store.save(scope, drafts)
+        assertEquals(drafts, store.load(scope))
     }
 
     @Test fun sendingAnOlderRevisionCannotAcknowledgeANewerEdit() {

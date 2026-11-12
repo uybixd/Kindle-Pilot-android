@@ -13,7 +13,8 @@ internal object ClippingsNoteMerger {
     private fun normalize(value: String) = value.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
 
     fun merge(original: ByteArray, clipping: KindleClipping, text: String, note: SidecarAnnotation?, kfx: Boolean): ByteArray {
-        val (parsed, issue) = ClippingsValidation.inspect(original)
+        val current = setOf(clipping.id)
+        val (parsed, issue) = ClippingsValidation.inspect(original, current)
         require(issue == null) { "Kindle 的 My Clippings.txt 格式不完整，已停止写入" }
         val fresh = parsed.items.firstOrNull { it.id == clipping.id }
             ?: error("Kindle 的 My Clippings.txt 中已找不到这条标注")
@@ -37,7 +38,7 @@ internal object ClippingsNoteMerger {
         val updated = if (records.isEmpty()) "" else records.joinToString("\n==========\n") + "\n==========\n"
         val lineEnding = when { originalText.contains("\r\n") -> "\r\n"; originalText.contains('\r') -> "\r"; else -> "\n" }
         val bytes = encodeLike(original, if (lineEnding == "\n") updated else updated.replace("\n", lineEnding))
-        val (verified, error) = ClippingsValidation.inspect(bytes)
+        val (verified, error) = ClippingsValidation.inspect(bytes, current)
         require(error == null) { "更新后的 My Clippings.txt 无法解析" }
         val result = verified.items.firstOrNull { it.id == clipping.id } ?: error("更新后丢失了原标注")
         require(if (text.isEmpty()) result.kindleNotes.isEmpty() else result.kindleNotes.any { it.text == text }) {

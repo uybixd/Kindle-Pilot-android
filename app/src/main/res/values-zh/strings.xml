@@ -1,4 +1,10 @@
 <resources>
     <string name="app_name">KPilot</string>
+    <string name="widget_daily_favorite_label">每日收藏</string>
+    <string name="widget_daily_favorite_description">每天重逢一条收藏的笔记。</string>
+    <string name="widget_next_favorite">下一条收藏</string>
+    <string name="widget_empty_book">在 KPilot 中收藏笔记</string>
+    <string name="widget_empty_text">让喜欢的文字留在桌面</string>
+    <string name="widget_preview_text">让收藏的文字，陪伴每一天。</string>
     <string name="remote_accessibility_description">启用对应控制方式后，可选地拦截硬件音量键和键盘方向键来控制 Kindle 翻页。不会读取屏幕内容或辅助功能事件。</string>
 </resources>

@@ -51,7 +51,8 @@ data class ClippingsSnapshot(
     val syncedAt: Instant,
     val sourceBytes: Long,
     val filteredDuplicateCount: Int = 0,
-    val filteredSingleSelectionCount: Int = 0
+    val filteredSingleSelectionCount: Int = 0,
+    internal val sourceHighlights: List<KindleClipping> = emptyList()
 )
 
 object ClippingsTextDecoder {
@@ -113,16 +114,30 @@ object ClippingsParser {
 
     fun parse(text: String): List<KindleClipping> = parseDetailed(text).items
 
-    fun parseDetailed(text: String): ClippingsParseResult {
+    fun parseDetailed(
+        text: String,
+        excludedHighlights: Set<String> = emptySet(),
+        currentHighlights: Set<String> = emptySet(),
+        includeSourceHighlights: Boolean = false
+    ): ClippingsParseResult {
         val normalized = text.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
         val blocks = normalized.split(separator).filter { it.isNotBlank() }
         val parsed = blocks.mapNotNull(::parseBlock)
 
         val exactSeen = linkedSetOf<String>()
         val exactRecords = parsed.filter { exactSeen.add(it.id) }
-        val contained = deduplicateContained(exactRecords)
+        val sourceHighlights = if (includeSourceHighlights || excludedHighlights.isNotEmpty()) {
+            mergeKindleNotes(exactRecords).filter { it.kind == ClippingKind.HIGHLIGHT }
+        } else emptyList()
+        val notesOnExcludedHighlights = sourceHighlights.filter { it.id in excludedHighlights }
+            .flatMap { it.kindleNotes }.map { it.id }.toSet()
+        val contained = deduplicateContained(exactRecords.filterNot {
+            it.kind == ClippingKind.HIGHLIGHT && it.id in excludedHighlights
+        }, currentHighlights)
         val filteredDuplicateCount = parsed.size - exactRecords.size + contained.filteredCount
-        val merged = mergeKindleNotes(contained.records)
+        val merged = mergeKindleNotes(contained.records).filterNot {
+            it.kind == ClippingKind.NOTE && it.id in notesOnExcludedHighlights
+        }
         val items = merged.filterNot { record ->
             record.kind == ClippingKind.HIGHLIGHT &&
                 record.kindleNotes.isEmpty() &&
@@ -137,7 +152,8 @@ object ClippingsParser {
             filteredSingleSelectionCount = merged.size - items.size,
             isBlank = normalized.isBlank(),
             hasSeparator = separator.containsMatchIn(normalized),
-            hasTrailingSeparator = trailingSeparator.containsMatchIn(normalized)
+            hasTrailingSeparator = trailingSeparator.containsMatchIn(normalized),
+            sourceHighlights = if (includeSourceHighlights) sourceHighlights else emptyList()
         )
     }
 
@@ -182,7 +198,10 @@ object ClippingsParser {
         )
     }
 
-    private fun deduplicateContained(records: List<KindleClipping>): DeduplicationResult {
+    private fun deduplicateContained(
+        records: List<KindleClipping>,
+        currentHighlights: Set<String>
+    ): DeduplicationResult {
         val candidates = records.mapIndexedNotNull { index, record ->
             if (record.kind !in setOf(ClippingKind.HIGHLIGHT, ClippingKind.NOTE)) return@mapIndexedNotNull null
             val comparable = normalizedComparableText(record.text)
@@ -197,7 +216,7 @@ object ClippingsParser {
             if (peers.any { peer ->
                     peer.index != candidate.index &&
                         compatibleRanges(candidate.record, peer.record) &&
-                        shouldRemove(candidate, peer)
+                        shouldRemove(candidate, peer, currentHighlights)
                 }) {
                 removed += candidate.index
             }
@@ -208,8 +227,11 @@ object ClippingsParser {
         )
     }
 
-    private fun shouldRemove(candidate: DeduplicationCandidate, peer: DeduplicationCandidate): Boolean {
-        if (candidate.comparableText == peer.comparableText) return peer.index < candidate.index
+    private fun shouldRemove(candidate: DeduplicationCandidate, peer: DeduplicationCandidate, currentHighlights: Set<String>): Boolean {
+        if (candidate.record.id in currentHighlights) return false
+        if (candidate.comparableText == peer.comparableText) {
+            return peer.record.id in currentHighlights || peer.index < candidate.index
+        }
         if (peer.comparableText.length <= candidate.comparableText.length) return false
         return peer.comparableText.contains(candidate.comparableText) || peer.compactedText.contains(candidate.compactedText)
     }
@@ -339,7 +361,8 @@ data class ClippingsParseResult(
     val filteredSingleSelectionCount: Int,
     val isBlank: Boolean,
     val hasSeparator: Boolean,
-    val hasTrailingSeparator: Boolean
+    val hasTrailingSeparator: Boolean,
+    internal val sourceHighlights: List<KindleClipping> = emptyList()
 )
 
 data class ClippingsFormatIssue(val recordBlocks: Int, val unrecognizedBlocks: Int, val reason: Reason) {
@@ -347,8 +370,8 @@ data class ClippingsFormatIssue(val recordBlocks: Int, val unrecognizedBlocks: I
 }
 
 object ClippingsValidation {
-    fun inspect(bytes: ByteArray): Pair<ClippingsParseResult, ClippingsFormatIssue?> {
-        val result = ClippingsParser.parseDetailed(ClippingsTextDecoder.decode(bytes))
+    fun inspect(bytes: ByteArray, currentHighlights: Set<String> = emptySet()): Pair<ClippingsParseResult, ClippingsFormatIssue?> {
+        val result = ClippingsParser.parseDetailed(ClippingsTextDecoder.decode(bytes), currentHighlights = currentHighlights)
         if (result.isBlank) return result to null
         if (!result.hasSeparator || !result.hasTrailingSeparator) {
             return result to ClippingsFormatIssue(result.recordBlocks, result.unrecognizedBlocks, ClippingsFormatIssue.Reason.INCOMPLETE)

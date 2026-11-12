@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.hongxiang.kpilot.i18n.AppText as Text
 import com.hongxiang.kpilot.i18n.localizedText
+import com.hongxiang.kpilot.ui.LocalTabActive
 
 private const val QQ_GROUP_NUMBER = "945331815"
 private const val OFFICIAL_ACCOUNT_QR_ASSET = "mmexport1786535949312.jpeg"
@@ -105,13 +106,13 @@ fun SupportKPilotEntry(compact: Boolean = false) {
         modifier = Modifier.clickable { showSupport = true }
     )
 
-    if (showSupport) {
+    if (LocalTabActive.current && showSupport) {
         ModalBottomSheet(onDismissRequest = { showSupport = false }) {
             SupportSheetContent(onShowQrCode = { qrDialog = it })
         }
     }
 
-    qrDialog?.let { dialog ->
+    qrDialog?.takeIf { LocalTabActive.current }?.let { dialog ->
         SupportQrCodeDialog(dialog = dialog, onDismiss = { qrDialog = null })
     }
 }

@@ -3,6 +3,7 @@ package com.hongxiang.kpilot.notes.writeback
 import com.hongxiang.kpilot.notes.ClippingsParser
 import com.hongxiang.kpilot.notes.ClippingsTextDecoder
 import com.hongxiang.kpilot.notes.KindleClipping
+import com.hongxiang.kpilot.notes.NoteDraft
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.Instant
@@ -82,6 +83,62 @@ class KindleNoteWritebackTest {
         expectFailure { AnnotationMatcher.match(listOf(candidate.copy(path = path.replace("Example", "Example Sequel"))), differentLocation) }
     }
 
+    @Test fun nonKfxSidecarWithUnrelatedFileNameStillMatchesByLocationAndTime() {
+        val store = fixture()
+        val candidate = SidecarCandidate(
+            "/mnt/us/documents/In Praise of Idleness.sdr/In Praise of Idleness.azw3r",
+            store.encoded(), store
+        )
+        val book = clipping.copy(bookTitle = "赞美闲散", author = "罗素")
+        assertEquals(0.0, AnnotationMatcher.titleSimilarity(candidate.path, book), 0.0)
+        assertEquals(store.annotations().single(), AnnotationMatcher.match(listOf(candidate), book).highlight)
+    }
+
+    @Test fun timestampFallbackAcceptsSidecarSuffixWhenFullTitleIsContained() {
+        val store = fixture()
+        val candidate = SidecarCandidate(
+            "/mnt/us/documents/Example (Writer) (Z-Library).sdr/Example (Writer) (Z-Library).azw3r",
+            store.encoded(), store
+        )
+        val shifted = clipping.copy(locationStart = 500, locationEnd = 501, author = "Writer")
+        assertEquals(store.annotations().single(), AnnotationMatcher.match(listOf(candidate), shifted).highlight)
+    }
+
+    @Test fun lowTitleSimilarityDoesNotBypassTheTimestampLimit() {
+        val store = fixture()
+        val candidate = SidecarCandidate(
+            "/mnt/us/documents/In Praise of Idleness.sdr/In Praise of Idleness.azw3r",
+            store.encoded(), store
+        )
+        val book = clipping.copy(
+            bookTitle = "赞美闲散",
+            author = null,
+            addedAt = clipping.addedAt?.plusSeconds(1_000)
+        )
+        expectFailure { AnnotationMatcher.match(listOf(candidate), book) }
+    }
+
+    @Test fun kindleAndPhoneTimeZoneDifferenceDoesNotBlockAnExactLocation() {
+        val store = fixture()
+        val candidate = SidecarCandidate(path, store.encoded(), store)
+        // My Clippings keeps Kindle-local wall time while the sidecar stores an
+        // absolute epoch, so a Kindle set to UTC and a UTC+8 phone differ by 8h.
+        val book = clipping.copy(addedAt = clipping.addedAt?.plusSeconds(8 * 3_600))
+        assertEquals(store.annotations().single(), AnnotationMatcher.match(listOf(candidate), book).highlight)
+        val halfHourBook = clipping.copy(addedAt = clipping.addedAt?.plusSeconds(30 * 60 + 1))
+        assertEquals(
+            store.annotations().single(),
+            AnnotationMatcher.match(listOf(candidate), halfHourBook).highlight
+        )
+    }
+
+    @Test fun largeTimeDifferenceThatIsNotATimeZoneOffsetIsStillRejected() {
+        val store = fixture()
+        val candidate = SidecarCandidate(path, store.encoded(), store)
+        val book = clipping.copy(addedAt = clipping.addedAt?.plusSeconds(50 * 60))
+        expectFailure { AnnotationMatcher.match(listOf(candidate), book) }
+    }
+
     @Test fun addingNotePreservesTrailingFieldsInAnnotationCache() {
         val store = fixture()
         val cache = store.values.first() as KrdsValue.ObjectValue
@@ -101,6 +158,136 @@ class KindleNoteWritebackTest {
         assertEquals("Written from Android", KindleReaderDataStore.decode(connection.files[path]!!).annotations().last().note)
         assertEquals(2, result.backupPaths.size)
         assertTrue(result.backupPaths.all { connection.files.containsKey(it) })
+    }
+
+    @Test fun syncWritesPhoneOnlyEditAndAcknowledgesAnIdenticalRetryWithoutWriting() {
+        val connection = FakeConnection()
+        val draft = NoteDraft(clipping.id, "from phone", kindleBaseText = "")
+        val writer = service()
+        val first = writer.syncDraft(connection, clipping, draft, null) as NoteDraftSyncResult.Accepted
+        assertNotNull(first.written)
+        val retry = writer.syncDraft(connection, clipping, draft, null) as NoteDraftSyncResult.Accepted
+        assertEquals("from phone", retry.text)
+        assertNull(retry.written)
+        assertEquals(2, connection.replaces)
+    }
+
+    @Test fun staleClippingsCannotHideKindleDeletionOrOverrideAConflictChoice() {
+        val connection = FakeConnection(source("old note"))
+        val draft = NoteDraft(clipping.id, "from phone", kindleBaseText = "old note")
+        val writer = service()
+        val conflict = (writer.syncDraft(connection, clipping, draft, null) as NoteDraftSyncResult.Conflict).conflict
+        assertEquals("", conflict.kindleText)
+        assertEquals(0, connection.replaces)
+
+        val store = fixture()
+        store.updateNote(store.annotations().single(), emptySet(), "new Kindle text", time + 2000, false)
+        connection.files[path] = store.encoded()
+        val refreshed = writer.syncDraft(connection, clipping, draft, NoteConflictChoice(conflict, true))
+            as NoteDraftSyncResult.Conflict
+        assertEquals("new Kindle text", refreshed.conflict.kindleText)
+        assertEquals(0, connection.replaces)
+        val accepted = writer.syncDraft(connection, clipping, draft, NoteConflictChoice(refreshed.conflict, false))
+            as NoteDraftSyncResult.Accepted
+        assertEquals("new Kindle text", accepted.text)
+        assertEquals(0, connection.replaces)
+    }
+
+    @Test fun pullRecognizesDeletedExportedNoteEvenIfItsHighlightWasAlsoDeleted() {
+        val exported = ClippingsParser.parse(source("Ceui")).single()
+        val store = fixture("9000", "9150")
+        val remaining = store.annotations().single()
+        store.updateNote(remaining, emptySet(), "another note", time + 10_000, false)
+        val connection = FakeConnection(source("Ceui"), store)
+        val archived = exported.copy(addedAt = exported.addedAt?.minusSeconds(100))
+        val surviving = exported.copy(id = "surviving", locationStart = 61, locationEnd = 62, kindleNotes = emptyList())
+        val result = service().readCurrentAnnotations(connection, listOf(archived, surviving))
+        assertEquals("", result.notes[archived.id])
+        assertEquals(setOf(archived.id), result.removedHighlights)
+        assertEquals(setOf(archived.id, surviving.id), result.checkedHighlights)
+        assertTrue(service().readCurrentAnnotations(connection, listOf(archived)).removedHighlights.isEmpty())
+        assertTrue(service().readCurrentAnnotations(connection, listOf(archived.copy(bookTitle = "Unrelated"))).notes.isEmpty())
+        assertEquals(0, connection.replaces)
+    }
+
+    @Test fun deletedAndRecreatedHighlightUsesLiveInstanceBeforeDeduplicating() {
+        val metadataTime = DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy h:mm:ss a", Locale.US)
+            .withZone(ZoneId.systemDefault())
+        val recreatedTime = time + 30_000
+        val recreated = source.replace(
+            metadataTime.format(Instant.ofEpochMilli(time)), metadataTime.format(Instant.ofEpochMilli(recreatedTime))
+        )
+        val exported = source("old note") + recreated
+        val store = fixture()
+        val tree = (store.values.first() as KrdsValue.ObjectValue).values[2] as KrdsValue.ObjectValue
+        val native = tree.values[1] as KrdsValue.ObjectValue
+        native.values[2] = KrdsValue.LongValue(recreatedTime)
+        native.values[3] = KrdsValue.LongValue(recreatedTime)
+        val connection = FakeConnection(exported, store)
+        val records = ClippingsParser.parseDetailed(exported, includeSourceHighlights = true).sourceHighlights
+        assertEquals(2, records.size)
+        val (old, live) = records
+        val state = service().readCurrentAnnotations(connection, records)
+        assertEquals(setOf(old.id), state.removedHighlights)
+        val visible = ClippingsParser.parseDetailed(exported, state.removedHighlights, setOf(live.id)).items
+        assertEquals(live.id, visible.single().id)
+        assertEquals("", state.notes[live.id])
+
+        expectFailure {
+            service().syncDraft(connection, old, NoteDraft(old.id, "archived draft", kindleBaseText = ""), null)
+        }
+        assertEquals(0, connection.replaces)
+        val result = service().syncDraft(connection, live, NoteDraft(live.id, "new note", kindleBaseText = ""), null)
+        assertTrue(result is NoteDraftSyncResult.Accepted)
+        assertEquals("new note", KindleReaderDataStore.decode(connection.files.getValue(path)).annotations().last().note)
+    }
+
+    @Test fun keepingPhoneEditsNativeNoteEvenWhenItsTextIsMissingFromClippings() {
+        val store = fixture()
+        val highlight = store.annotations().single()
+        val native = store.updateNote(highlight, emptySet(), "from Kindle", time + 2000, true)!!
+        val connection = FakeConnection(source("base"), store)
+        val draft = NoteDraft(clipping.id, "from phone", kindleBaseText = "base")
+        val writer = service()
+        val conflict = (writer.syncDraft(connection, clipping, draft, null) as NoteDraftSyncResult.Conflict).conflict
+        writer.syncDraft(connection, clipping, draft, NoteConflictChoice(conflict, true))
+        val notes = KindleReaderDataStore.decode(connection.files.getValue(path)).annotations()
+        assertEquals(listOf(highlight, native.copy(note = "from phone", modificationTime = time + 1000)), notes)
+    }
+
+    @Test fun oneConflictDoesNotPreventAnIndependentDraftInTheSameBookFromWriting() {
+        val secondSource = source().replace("11-13", "21-23")
+            .replace("A complete example highlight.", "A second highlight.")
+        val clippings = ClippingsParser.parse(source + secondSource)
+        val first = clippings.first { it.locationStart == 11 }
+        val second = clippings.first { it.locationStart == 21 }
+        val store = fixture()
+        val firstHighlight = store.annotations().single()
+        val cache = store.values.first() as KrdsValue.ObjectValue
+        val tree = cache.values[2] as KrdsValue.ObjectValue
+        val secondCache = fixture("3000", "3300").values.first() as KrdsValue.ObjectValue
+        val secondTree = secondCache.values[2] as KrdsValue.ObjectValue
+        tree.values[0] = KrdsValue.Integer(2)
+        tree.values.add(secondTree.values[1])
+        store.updateNote(firstHighlight, emptySet(), "Kindle edit", time + 2000, false)
+
+        val connection = FakeConnection(source + secondSource, store)
+        val writer = service()
+        val conflict = writer.syncDraft(connection, first, NoteDraft(first.id, "phone one", kindleBaseText = ""), null)
+        assertTrue(conflict is NoteDraftSyncResult.Conflict)
+        val accepted = writer.syncDraft(connection, second, NoteDraft(second.id, "phone two", kindleBaseText = ""), null)
+        assertTrue(accepted is NoteDraftSyncResult.Accepted)
+        val notes = KindleReaderDataStore.decode(connection.files.getValue(path)).annotations().mapNotNull { it.note }
+        assertEquals(listOf("Kindle edit", "phone two"), notes)
+        assertEquals(2, connection.replaces)
+    }
+
+    @Test fun threeWayComparisonPreservesUnchangedAndUnknownBaselines() {
+        assertEquals(NoteSyncAction.KEEP_KINDLE, noteSyncAction("base", "base", "Kindle only"))
+        assertEquals(NoteSyncAction.WRITE_PHONE, noteSyncAction("base", "", "base"))
+        assertEquals(NoteSyncAction.ASK, noteSyncAction("base", "", "Kindle edit"))
+        assertEquals(NoteSyncAction.ASK, noteSyncAction(null, "legacy draft", ""))
+        assertEquals(NoteSyncAction.KEEP_KINDLE, noteSyncAction(null, "same", "same"))
     }
 
     @Test fun mergerReplacesLatestKindleTextAndPreservesUtf16Bom() {
@@ -181,6 +368,7 @@ class KindleNoteWritebackTest {
         expectFailure { service().write(connection, clipping, "中".repeat(22000)) }
         assertEquals(0, connection.replaces)
     }
+
 
     private fun service() = KindleNoteWritebackService({ error("Unused in offline tests") }, { time + 1000 })
 

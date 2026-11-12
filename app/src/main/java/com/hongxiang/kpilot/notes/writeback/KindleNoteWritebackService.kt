@@ -5,6 +5,8 @@ import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.notes.ClippingKind
 import com.hongxiang.kpilot.notes.ClippingsValidation
 import com.hongxiang.kpilot.notes.KindleClipping
+import com.hongxiang.kpilot.notes.NoteDraft
+import java.security.MessageDigest
 import java.util.UUID
 
 data class WritebackResult(
@@ -33,27 +35,176 @@ class KindleNoteWritebackService internal constructor(
     }
 
     internal fun write(connection: NoteWritebackConnection, clipping: KindleClipping, text: String): WritebackResult {
-        require(clipping.kind == ClippingKind.HIGHLIGHT) { "只能给已有的 Kindle 标注新增或编辑批注" }
-        require(clipping.locationStart != null || clipping.locationEnd != null) { "这条标注没有可匹配的位置" }
-        val normalizedText = text.replace("\r\n", "\n").replace('\r', '\n').trim()
+        val normalizedText = validateText(text)
+        ensureReaderClosed(connection)
+        return commit(connection, prepare(connection, clipping), normalizedText)
+    }
+
+    internal fun connect(settings: ConnectionSettings): NoteWritebackConnection {
+        settings.validate()
+        return connectionFactory(settings)
+    }
+
+    internal fun syncDraft(
+        connection: NoteWritebackConnection,
+        clipping: KindleClipping,
+        draft: NoteDraft,
+        choice: NoteConflictChoice?
+    ): NoteDraftSyncResult {
+        ensureReaderClosed(connection)
+        val prepared = prepare(connection, clipping)
+        val match = prepared.match
+        require(AnnotationMatcher.sameCreationTime(match.highlight, prepared.clipping)) {
+            "这条草稿对应的 Kindle 划线已改变或无法核对，已保留草稿"
+        }
+        val notes = currentNotes(match)
+        val kindle = notes.singleOrNull()?.note?.let(::normalizedNoteText).orEmpty()
+        val phone = normalizedNoteText(draft.text)
+        val base = draft.kindleBaseText?.let(::normalizedNoteText)
+        val version = MessageDigest.getInstance("SHA-256")
+            .digest(listOf(match.candidate.path, match.highlight, notes).toString().toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val conflict = NoteConflict(clipping.id, draft.revision, phone, kindle, base != null, version)
+        val action = if (choice == null) noteSyncAction(base, phone, kindle) else when {
+            choice.conflict != conflict -> NoteSyncAction.ASK
+            choice.keepPhone -> NoteSyncAction.WRITE_PHONE
+            else -> NoteSyncAction.KEEP_KINDLE
+        }
+        return when (action) {
+            NoteSyncAction.ASK -> NoteDraftSyncResult.Conflict(conflict)
+            NoteSyncAction.KEEP_KINDLE -> NoteDraftSyncResult.Accepted(kindle)
+            NoteSyncAction.WRITE_PHONE -> {
+                if (phone == kindle) return NoteDraftSyncResult.Accepted(kindle)
+                val result = commit(connection, prepared, validateText(phone), notes)
+                NoteDraftSyncResult.Accepted(phone, result)
+            }
+        }
+    }
+
+    private fun validateText(text: String): String {
+        val normalizedText = normalizedNoteText(text)
         require(!Regex("(?m)^={10,}\\s*$").containsMatchIn(normalizedText) && '\u0000' !in normalizedText) {
             "批注不能包含独立的 Kindle 记录分隔行或空字符"
         }
         require(normalizedText.toByteArray(Charsets.UTF_8).size <= 65535) { "批注内容过长（UTF-8 最多 65535 字节）" }
-        ensureReaderClosed(connection)
+        return normalizedText
+    }
+
+    private fun prepare(connection: NoteWritebackConnection, clipping: KindleClipping): PreparedWrite {
+        require(clipping.kind == ClippingKind.HIGHLIGHT) { "只能给已有的 Kindle 标注新增或编辑批注" }
+        require(clipping.locationStart != null || clipping.locationEnd != null) { "这条标注没有可匹配的位置" }
         val originalClippings = connection.download(CLIPPINGS_PATH)
-        val (snapshot, issue) = ClippingsValidation.inspect(originalClippings)
+        val (snapshot, issue) = ClippingsValidation.inspect(originalClippings, setOf(clipping.id))
         require(issue == null) { "Kindle 的 My Clippings.txt 格式不完整，已停止写入" }
         val fresh = snapshot.items.firstOrNull { it.id == clipping.id }
             ?: error("Kindle 的 My Clippings.txt 中已找不到这条标注")
-        val paths = connection.exec(LIST_SIDECARS).lineSequence().map(String::trim)
+        val candidates = readCandidates(connection, sidecarPaths(connection), listOf(fresh))
+        return PreparedWrite(fresh, AnnotationMatcher.match(candidates, fresh))
+    }
+
+    internal data class CurrentAnnotations(
+        val notes: Map<String, String>,
+        val removedHighlights: Set<String>,
+        val checkedHighlights: Set<String>
+    )
+
+    internal fun readCurrentAnnotations(
+        settings: ConnectionSettings,
+        clippings: List<KindleClipping>
+    ): CurrentAnnotations = connect(settings).use { readCurrentAnnotations(it, clippings) }
+
+    internal fun readCurrentAnnotations(
+        connection: NoteWritebackConnection,
+        clippings: List<KindleClipping>
+    ): CurrentAnnotations {
+        val paths = sidecarPaths(connection)
+        val candidates = readCandidates(connection, paths, clippings)
+        val notes = mutableMapOf<String, String>()
+        val removed = mutableSetOf<String>()
+        val checked = mutableSetOf<String>()
+        for (book in clippings.groupBy { it.bookId }.values) {
+            val path = paths.singleOrNull { AnnotationMatcher.fullTitleMatches(it, book.first()) }
+            val candidate = candidates.singleOrNull { it.path == path && !it.path.endsWith(".yjr", true) }
+            val nativeHighlights = candidate?.store?.annotations().orEmpty()
+                .filter { it.type == KindleReaderDataStore.HIGHLIGHT }
+            val exportsByTime = book.groupingBy { it.addedAt }.eachCount()
+            val missing = mutableListOf<KindleClipping>()
+            var confirmedBook = false
+            for (clipping in book) {
+                checkInterrupted()
+                if (candidate == null && clipping.kindleNotes.isEmpty()) continue
+                val match = try {
+                    if (candidate == null) AnnotationMatcher.matchOrNull(candidates, clipping)
+                    else {
+                        // Repeated exports can share the same position. Only the creation
+                        // timestamp can distinguish a deleted highlight from a re-created one.
+                        val timestamp = clipping.addedAt?.toEpochMilli()
+                        if (timestamp == null || exportsByTime[clipping.addedAt] != 1) continue
+                        val exact = nativeHighlights.filter {
+                            kotlin.math.abs(it.creationTime - timestamp) < 1000
+                        }
+                        require(exact.size <= 1)
+                        exact.singleOrNull()?.let { AnnotationMatch(candidate, it) }
+                    }
+                } catch (_: IllegalArgumentException) {
+                    continue
+                }
+                if (match != null) {
+                    confirmedBook = confirmedBook || candidate != null
+                    checked += clipping.id
+                    runCatching { currentNotes(match).singleOrNull()?.note?.let(::normalizedNoteText).orEmpty() }
+                        .onSuccess { notes[clipping.id] = it }
+                } else {
+                    if (clipping.addedAt != null && clipping.locationStart != null &&
+                        Regex("""\d{1,2}[:：]\d{2}[:：]\d{2}""").containsMatchIn(clipping.metadata)
+                    ) missing += clipping
+                    if (exportedNotesAreGone(clipping, paths, candidates)) notes[clipping.id] = ""
+                }
+            }
+            if (confirmedBook) {
+                missing.forEach {
+                    checked += it.id
+                    removed += it.id
+                }
+            }
+        }
+        return CurrentAnnotations(notes, removed, checked)
+    }
+
+    private fun exportedNotesAreGone(
+        clipping: KindleClipping,
+        paths: List<String>,
+        candidates: List<SidecarCandidate>
+    ): Boolean {
+        if (clipping.kindleNotes.isEmpty()) return false
+        val path = paths.singleOrNull { AnnotationMatcher.fullTitleMatches(it, clipping) } ?: return false
+        if (path.endsWith(".yjr", true)) return false
+        val annotations = candidates.singleOrNull { it.path == path }?.store?.annotations() ?: return false
+        if (annotations.isEmpty()) return false
+        val liveTexts = annotations.mapNotNull { it.note?.let(::normalizedNoteText) }.toSet()
+        return clipping.kindleNotes.none { normalizedNoteText(it.text) in liveTexts }
+    }
+
+    private fun sidecarPaths(connection: NoteWritebackConnection): List<String> =
+        connection.exec(LIST_SIDECARS).lineSequence().map(String::trim)
             .filter { it.startsWith("/mnt/us/documents/") && !it.contains('\u0000') }
             .filter { it.endsWith(".azw3r", true) || it.endsWith(".mbp1", true) || it.endsWith(".yjr", true) }
-            .distinct().sortedByDescending { AnnotationMatcher.titleSimilarity(it, fresh) }.toList()
+            .distinct().toList()
+
+    private fun readCandidates(
+        connection: NoteWritebackConnection,
+        paths: List<String>,
+        clippings: List<KindleClipping>
+    ): List<SidecarCandidate> {
         require(paths.isNotEmpty()) { "Kindle 中没有找到 AZW3、MOBI 或 KFX 批注文件" }
-        val candidates = paths.mapNotNull { path ->
+        return paths.mapNotNull { path ->
             checkInterrupted()
-            if (AnnotationMatcher.titleSimilarity(path, fresh) < 0.12) return@mapNotNull null
+            // KFX records carry no usable reading offsets, so reject unrelated files by title.
+            // AZW3/MOBI must still be decoded: their sidecar name can differ from the
+            // My Clippings title while the location and creation time still identify it.
+            if (path.endsWith(".yjr", true) && clippings.none { AnnotationMatcher.titleSimilarity(path, it) >= 0.12 }) {
+                return@mapNotNull null
+            }
             runCatching {
                 val bytes = connection.download(path)
                 val store = KindleReaderDataStore.decode(bytes)
@@ -65,11 +216,58 @@ class KindleNoteWritebackService internal constructor(
                 null // Unsupported sidecars are never modified.
             }
         }
-        val match = AnnotationMatcher.match(candidates, fresh)
+    }
+
+    private fun currentNotes(match: AnnotationMatch): List<SidecarAnnotation> {
+        val annotations = match.candidate.store.annotations()
+        val highlights = annotations.filter { it.type == KindleReaderDataStore.HIGHLIGHT }
+        val target = match.highlight
+        val notes = annotations.filter { it.type == KindleReaderDataStore.NOTE }.filter { note ->
+            val exact = highlights.filter { highlight ->
+                note.endPosition == highlight.endPosition &&
+                    (note.startPosition == highlight.startPosition || note.startPosition == highlight.endPosition)
+            }
+            val owners = exact.ifEmpty { highlights.filter { it.contains(note) } }
+            require(owners.isNotEmpty() || !target.mightOverlap(note)) {
+                "无法确定这条 Kindle 批注的位置，已保留草稿"
+            }
+            require(target !in owners || owners.size == 1) { "这条 Kindle 批注可能属于多条划线，无法安全同步" }
+            target in owners
+        }
+        require(notes.size <= 1) { "这条划线有多条 Kindle 批注，无法安全同步" }
+        return notes
+    }
+
+    private fun SidecarAnnotation.contains(note: SidecarAnnotation): Boolean {
+        if (note.startPosition == startPosition && note.endPosition == startPosition) return true
+        val start = startPosition.toLongOrNull() ?: return false
+        val end = endPosition.toLongOrNull() ?: return false
+        val noteStart = note.startPosition.toLongOrNull() ?: return false
+        val noteEnd = note.endPosition.toLongOrNull() ?: return false
+        return noteStart >= start && noteEnd >= noteStart && noteEnd <= end
+    }
+
+    private fun SidecarAnnotation.mightOverlap(note: SidecarAnnotation): Boolean {
+        val start = startPosition.toLongOrNull() ?: return true
+        val end = endPosition.toLongOrNull() ?: return true
+        val noteStart = note.startPosition.toLongOrNull() ?: return true
+        val noteEnd = note.endPosition.toLongOrNull() ?: return true
+        return noteStart <= end && noteEnd >= start
+    }
+
+    private data class PreparedWrite(val clipping: KindleClipping, val match: AnnotationMatch)
+
+    private fun commit(
+        connection: NoteWritebackConnection,
+        prepared: PreparedWrite,
+        normalizedText: String,
+        verifiedNotes: List<SidecarAnnotation>? = null
+    ): WritebackResult {
+        val (fresh, match) = prepared
         val originalStore = match.candidate.store
         val updatedStore = KindleReaderDataStore.decode(match.candidate.bytes)
         val newNote = updatedStore.updateNote(match.highlight, fresh.kindleNotes.map { it.text }.toSet(),
-            normalizedText, now(), match.isKfx)
+            normalizedText, now(), match.isKfx, verifiedNotes)
         val sidecarBytes = updatedStore.encoded()
         val verifiedStore = KindleReaderDataStore.decode(sidecarBytes)
         require(verifiedStore.annotations().filter { it.type == KindleReaderDataStore.HIGHLIGHT } ==

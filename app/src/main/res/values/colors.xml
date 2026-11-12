@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_paper_background">#FAF8F2</color>
+    <color name="widget_paper_foreground">#3E3E42</color>
+    <color name="widget_paper_secondary">#5C6663</color>
+    <color name="widget_paper_accent">#346E6A</color>
+    <color name="widget_paper_divider">#DDDCD4</color>
+    <color name="widget_paper_next_background">#E2ECE7</color>
+    <color name="widget_terminal_background">#000000</color>
+    <color name="widget_terminal_foreground">#009900</color>
+</resources>

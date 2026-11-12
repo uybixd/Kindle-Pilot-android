@@ -41,6 +41,23 @@ third-party licenses. Their package versions and declared licenses are recorded
 in `xiaomi_band/package-lock.json`. Those packages are not relicensed under
 KPilot's GNU General Public License.
 
+## Terminus Font
+
+The terminal-style home screen widget bundles the Terminus (TTF) font:
+
+```text
+app/src/main/res/font/terminus_regular.ttf
+app/src/main/res/font/terminus_bold.ttf
+```
+
+Copyright (c) 2010 Dimitar Toshkov Zhekov, with Reserved Font Name
+"Terminus Font". Copyright (c) 2011-2023 Tilman Blumenbach, with Reserved
+Font Name "Terminus (TTF)". The font is licensed under the SIL Open Font
+License, Version 1.1. The full license text is stored in
+[`licenses/Terminus-OFL.txt`](licenses/Terminus-OFL.txt). The fonts are
+distributed with KPilot as part of the application and are not relicensed
+under KPilot's GNU General Public License.
+
 ## Support assets
 
 Personal support/payment QR-code images are not stored in this repository.

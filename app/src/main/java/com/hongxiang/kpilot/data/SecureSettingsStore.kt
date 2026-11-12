@@ -22,7 +22,8 @@ class SecureSettingsStore(context: Context, namespace: String = "secure_connecti
             settings.port.toString(),
             settings.username,
             settings.password,
-            settings.eventDevice
+            settings.eventDevice,
+            settings.kindleId
         ).joinToString("\u0000").toByteArray(Charsets.UTF_8)
         try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -43,7 +44,10 @@ class SecureSettingsStore(context: Context, namespace: String = "secure_connecti
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
         val values = cipher.doFinal(Base64.decode(encrypted, Base64.NO_WRAP))
             .toString(Charsets.UTF_8).split('\u0000')
-        ConnectionSettings(values[0], values[1].toInt(), values[2], values[3], values[4])
+        ConnectionSettings(
+            values[0], values[1].toInt(), values[2], values[3],
+            values.getOrNull(4).orEmpty(), values.getOrNull(5).orEmpty()
+        )
     }.getOrNull()
 
     fun clear() { preferences.edit { this.clear() } }
