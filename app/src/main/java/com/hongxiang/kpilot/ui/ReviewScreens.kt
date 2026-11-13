@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text as ContentText
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -167,6 +168,7 @@ internal fun VocabularyReviewDialog(model: MainViewModel, state: UiState, onClos
                         word = word,
                         state = state,
                         model = model,
+                        queue = queue,
                         now = now,
                         answerVisible = answerVisible,
                         onReveal = { answerVisible = true }
@@ -182,13 +184,13 @@ private fun VocabularyReviewContent(
     word: VocabularyWord,
     state: UiState,
     model: MainViewModel,
+    queue: VocabularyReviewQueue,
     now: Long,
     answerVisible: Boolean,
     onReveal: () -> Unit
 ) {
     val lookup = word.lookups.lastOrNull()
     val definition = state.vocabularyDefinitions[word.key]?.definition.orEmpty()
-    val queue = model.vocabularyReviewQueue(now)
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp),
@@ -221,26 +223,31 @@ private fun VocabularyReviewContent(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    if (!answerVisible) {
-                        Text(
-                            "先在心里回忆词义，再显示答案",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        lookup?.stem?.takeIf { it.isNotBlank() && !it.equals(lookup.word, true) }?.let {
+                    if (answerVisible) {
+                        val entry = word.dictionaryEntry
+                        lookup?.stem?.takeIf {
+                            it.isNotBlank() && !it.equals(lookup.word, true) && !it.equals(entry?.headword, true)
+                        }?.let {
                             Text(
                                 "原形：$it",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Text(
-                            definition.ifBlank { "还没有释义，可以稍后在生词详情中补充。" },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (definition.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.onSurface
-                        )
+                        if (definition.isNotBlank()) {
+                            SelectionContainer {
+                                ContentText(definition, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                        if (entry != null) {
+                            VocabularyDictionaryContent(entry, lookup?.word ?: word.displayWord)
+                        } else if (definition.isBlank()) {
+                            Text(
+                                "还没有释义，可以稍后在生词详情中补充。",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         lookup?.usage?.takeIf { it.isNotBlank() }?.let {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(

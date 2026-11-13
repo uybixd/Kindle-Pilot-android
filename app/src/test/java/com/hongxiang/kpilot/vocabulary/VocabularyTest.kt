@@ -1,11 +1,43 @@
 package com.hongxiang.kpilot.vocabulary
 
+import java.io.File
+import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VocabularyTest {
+    @Test fun bundledDictionaryMatchesCachedWordsAndFallsBackToKindleStem() {
+        val lookups = listOf(
+            lookup("abolish", "ABOLISH", language = "en-US"),
+            lookup("swam", "swam", stem = "swim"),
+            lookup("plural", "running", stem = "run"),
+            lookup("stem", "serendipities", stem = "serendipity"),
+            lookup("unknown", "kpilotexamplewithoutanentry", language = ""),
+            lookup("french", "abolish", language = "fr")
+        )
+        val entries = VocabularyDictionary.match(lookups) {
+            File("src/main/assets/${VocabularyDictionary.ASSET}").inputStream()
+        }
+
+        val abolish = entries.getValue("abolish")
+        assertEquals("abolish", abolish.headword)
+        assertTrue(abolish.ipa.isNotBlank())
+        assertTrue(abolish.senses.any { it.partOfSpeech == "verb" && "law" in it.gloss })
+        assertEquals("swam", entries.getValue("swam").headword)
+        assertEquals("running", entries.getValue("plural").headword)
+        assertEquals("serendipity", entries.getValue("stem").headword)
+        assertEquals(setOf("abolish", "swam", "plural", "stem"), entries.keys)
+        val words = VocabularySnapshot(lookups, Instant.EPOCH, 0, entries).words.associateBy { it.key }
+        assertEquals(abolish, words.getValue("abolish").dictionaryEntry)
+        assertNull(words.getValue("unknown").dictionaryEntry)
+    }
+
+    private fun lookup(key: String, word: String, stem: String = word, language: String = "en") =
+        VocabularyLookup(key, key, word, stem, language, "Book", "", null, "", null)
+
     private val validSchema = mapOf(
         "LOOKUPS" to setOf("id", "word_key", "book_key", "pos", "usage", "timestamp"),
         "WORDS" to setOf("id", "word", "stem", "lang"),

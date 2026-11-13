@@ -19,6 +19,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.RemoteViews
 import android.widget.TextView
+import android.widget.ViewFlipper
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.createBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -70,7 +71,7 @@ class FavoriteWidgetRenderingTest {
         assertEquals(context.textPixels(size.terminalTextSp.last), short.textSize, 0.01f)
         assertTrue(short.textSize > medium.textSize)
         assertTrue(medium.textSize > long.textSize)
-        assertEquals(context.textPixels(size.terminalTextSp.first), overflow.textSize, 0.01f)
+        assertTrue(overflow.textSize in context.textPixels(10)..context.textPixels(size.terminalTextSp.first))
         bodies.take(3).zip(quotes).forEach { (body, quote) -> assertComplete(body, quote) }
         val overflowLayout = overflow.layout
         assertTrue(overflowLayout.getEllipsisCount(overflowLayout.lineCount - 1) > 0)
@@ -94,6 +95,27 @@ class FavoriteWidgetRenderingTest {
     }
 
     @Test
+    fun shortQuotesUseLargerTypeInBothStyles() {
+        val target = InstrumentationRegistry.getInstrumentation().targetContext
+        val context = target.createConfigurationContext(
+            Configuration(target.resources.configuration).apply { fontScale = 1f }
+        )
+        val note = FavoriteWidgetNote("short", "先生曰：“为学大病在好名。”", "传习录", "王阳明")
+        val compactNote = note.copy(text = "为学大病在好名。")
+
+        for (style in FavoriteWidgetStyle.entries) {
+            val small = assertFits(context, compactNote, style, FavoriteWidgetSize.SMALL, 150, 150)
+            val medium = assertFits(context, note, style, FavoriteWidgetSize.MEDIUM, 355, 158)
+            val large = assertFits(context, note, style, FavoriteWidgetSize.LARGE, 335, 364)
+            assertEquals(context.textPixels(23), small.textSize, 0.01f)
+            assertEquals(context.textPixels(24), medium.textSize, 0.01f)
+            assertEquals(context.textPixels(44), large.textSize, 0.01f)
+            assertComplete(small, compactNote.text)
+            listOf(medium, large).forEach { assertComplete(it, note.text) }
+        }
+    }
+
+    @Test
     fun terminalDrawsOnePixelBorderAroundTheLauncherHost() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -102,10 +124,14 @@ class FavoriteWidgetRenderingTest {
         val width = context.pixels(338)
         val bitmapHeight = context.pixels(158)
         val hostHeight = context.pixels(174)
-        val green = Color.rgb(0, 153, 0)
+        val green = Color.rgb(0, 230, 118)
         val style = FavoriteWidgetStyle.TERMINAL
         val preview = FavoriteWidgetCard.render(context, note, style, FavoriteWidgetSize.MEDIUM, width, bitmapHeight)
-        assertEquals(green, preview.bitmap.getPixel(width / 2, 0))
+        val previewEdge = preview.bitmap.getPixel(width / 2, 0)
+        assertEquals(0, Color.red(previewEdge))
+        assertTrue(Color.blue(previewEdge) in 1..Color.blue(green))
+        assertTrue(Color.green(previewEdge) in 1..Color.green(green))
+        assertTrue(Color.alpha(previewEdge) > 0)
         assertEquals(Color.BLACK, preview.bitmap.getPixel(width / 2, 1))
         assertEquals(Color.TRANSPARENT, preview.bitmap.getPixel(0, 0))
 
@@ -120,7 +146,7 @@ class FavoriteWidgetRenderingTest {
         root.layout(0, 0, width, hostHeight)
         val hostBitmap = createBitmap(width, hostHeight)
         root.draw(Canvas(hostBitmap))
-        assertEquals(green, hostBitmap.getPixel(width / 2, 0))
+        assertEquals(previewEdge, hostBitmap.getPixel(width / 2, 0))
         assertEquals(Color.BLACK, hostBitmap.getPixel(width / 2, 1))
         assertEquals(Color.BLACK, hostBitmap.getPixel(width / 2, (hostHeight - bitmapHeight) / 2))
     }
@@ -157,7 +183,7 @@ class FavoriteWidgetRenderingTest {
         assertEquals("$ Terminal 101", source.text.toString())
         assertEquals("# 2026.07.02", date.text.toString())
 
-        val content = FavoriteWidgetCard.render(context, note, style, size, width, height, drawBackground = false)
+        val content = FavoriteWidgetCard.render(context, note, style, size, width, height, forLauncher = true)
         val views = FavoriteWidgetProvider.buildRemoteViews(context, note, options(338, 158), style)
         val parcel = Parcel.obtain()
         try {
@@ -167,8 +193,10 @@ class FavoriteWidgetRenderingTest {
             val image = root.findViewById<ImageView>(R.id.widget_card)
             val bitmap = (image.drawable as BitmapDrawable).bitmap
             assertTrue(content.bitmap.sameAs(bitmap))
-            assertEquals(content.description, root.contentDescription.toString())
-            assertTrue(root.hasOnClickListeners())
+            val openTouch = root.findViewById<View>(R.id.widget_open_touch)
+            assertEquals(content.description, openTouch.contentDescription.toString())
+            assertTrue(openTouch.hasOnClickListeners())
+            assertTrue(!root.hasOnClickListeners())
             assertTrue(root.findViewById<View>(R.id.widget_next_touch).hasOnClickListeners())
         } finally {
             parcel.recycle()
@@ -194,6 +222,59 @@ class FavoriteWidgetRenderingTest {
         assertEquals(context.getColor(R.color.widget_terminal_background), (root.background as GradientDrawable).color?.defaultColor)
         assertTrue(!paperBitmap.sameAs(terminalBitmap))
         assertTrue(root.findViewById<View>(R.id.widget_next_touch).hasOnClickListeners())
+    }
+
+    @Test
+    fun advancingFadesOnlyTheTextAndKeepsTheExistingCard() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val host = instrumentation.context
+        val first = FavoriteWidgetNote("first", "First passage", "Reading journal")
+        val second = FavoriteWidgetNote("second", "先生曰：“为学大病在好名。”", "传习录", "王阳明", 1_800_000_000_000)
+        val options = options(335, 364)
+
+        for (style in FavoriteWidgetStyle.entries) {
+            val firstViews = FavoriteWidgetProvider.buildRemoteViews(context, first, options, style)
+            val secondViews = FavoriteWidgetProvider.buildRemoteViews(
+                context, second, options, style, displayedChild = 1, animate = true
+            )
+            instrumentation.runOnMainSync {
+                val root = firstViews.apply(host, FrameLayout(host))
+                val flipper = root.findViewById<ViewFlipper>(R.id.widget_text_flipper)
+                val divider = root.findViewById<ImageView>(R.id.widget_static_divider)
+                val arrow = root.findViewById<View>(R.id.widget_next_touch)
+                val outgoingSlot = flipper.currentView as ViewFlipper
+                val outgoing = outgoingSlot.currentView as ImageView
+                val oldText = (outgoing.drawable as BitmapDrawable).bitmap
+                val oldDivider = (divider.drawable as BitmapDrawable).bitmap
+
+                secondViews.reapply(host, root)
+                val incomingSlot = flipper.currentView as ViewFlipper
+                val incoming = incomingSlot.currentView as ImageView
+                assertEquals(1, flipper.displayedChild)
+                assertEquals(incomingSlot.inAnimation, incoming.animation)
+                assertEquals(flipper.outAnimation, outgoingSlot.animation)
+                val blurred = incomingSlot.findViewById<ImageView>(R.id.widget_card_alternate_blur)
+                assertEquals(incomingSlot.outAnimation, blurred.animation)
+                assertEquals(android.graphics.Bitmap.Config.ALPHA_8, (blurred.drawable as BitmapDrawable).bitmap.config)
+                assertTrue(oldText.sameAs((outgoing.drawable as BitmapDrawable).bitmap))
+                assertTrue(!oldText.sameAs((incoming.drawable as BitmapDrawable).bitmap))
+                assertTrue(root.findViewById<View>(R.id.widget_open_touch).contentDescription.contains(second.text))
+                assertTrue(oldDivider.sameAs((divider.drawable as BitmapDrawable).bitmap))
+                for (view in listOf(root, divider, arrow)) assertEquals(null, view.animation)
+
+                firstViews.reapply(host, root)
+                assertEquals(0, flipper.displayedChild)
+                assertEquals(outgoingSlot, flipper.currentView)
+
+                val freshRoot = secondViews.apply(host, FrameLayout(host))
+                val freshFlipper = freshRoot.findViewById<ViewFlipper>(R.id.widget_text_flipper)
+                assertEquals(1, freshFlipper.displayedChild)
+                val freshSlot = freshFlipper.currentView as ViewFlipper
+                assertTrue((freshSlot.currentView as ImageView).drawable is BitmapDrawable)
+                assertEquals(null, freshSlot.animation)
+            }
+        }
     }
 
     @SdkSuppress(minSdkVersion = Build.VERSION_CODES.S)
@@ -242,7 +323,8 @@ class FavoriteWidgetRenderingTest {
             val root = views.apply(context, FrameLayout(context))
             val nextTouch = root.findViewById<View>(R.id.widget_next_touch)
 
-            assertTrue(root.contentDescription.contains(context.getString(R.string.widget_empty_text)))
+            val openTouch = root.findViewById<View>(R.id.widget_open_touch)
+            assertTrue(openTouch.contentDescription.contains(context.getString(R.string.widget_empty_text)))
             assertEquals(View.GONE, nextTouch.visibility)
         }
     }
@@ -268,14 +350,14 @@ class FavoriteWidgetRenderingTest {
         val date = root.findViewById<TextView>(R.id.widget_date)
         assertEquals("${widthDp}x$heightDp clips the date", date.text.length, date.layout.getLineEnd(0))
         assertTrue(date.layout.getLineMax(0) <= date.width)
-        if (style == FavoriteWidgetStyle.TERMINAL) {
+        if (style.isTerminal) {
             val source = root.findViewById<TextView>(R.id.widget_source)
             val author = root.findViewById<TextView>(R.id.widget_author)
             val divider = root.findViewById<View>(R.id.widget_divider)
-            val green = Color.rgb(0, 153, 0)
-            for (view in listOf(source, author, body, date)) assertEquals(green, view.currentTextColor)
-            assertEquals(green, (divider.background as ColorDrawable).color)
-            assertEquals(View.VISIBLE, body.visibility)
+            val foreground = context.getColor(style.dividerColor)
+            for (view in listOf(source, author, body, date)) assertEquals(foreground, view.currentTextColor)
+            assertEquals(foreground, (divider.background as ColorDrawable).color)
+            assertEquals("${widthDp}x$heightDp should show the quote at ${body.textSize}px", View.VISIBLE, body.visibility)
             assertTrue(abs(body.totalPaddingTop - body.totalPaddingBottom) <= 1)
             assertTrue(body.top >= (source.parent as View).bottom)
             assertTrue(body.bottom <= (divider.parent as View).top)

@@ -79,6 +79,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Spellcheck
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -137,6 +138,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import com.hongxiang.kpilot.model.KindleCommand
 import com.hongxiang.kpilot.data.NavigationItem
 import com.hongxiang.kpilot.data.NavigationOptions
@@ -548,7 +550,6 @@ private fun KPilotApp(viewModel: MainViewModel) {
                                 deletingPath = state.libraryDeletingPath,
                                 deleteMessage = state.libraryDeleteMessage,
                                 deleteError = state.libraryDeleteError,
-                                errorMessage = state.libraryError,
                                 onRefresh = viewModel::syncLibrary,
                                 onRefreshClippings = viewModel::refreshLibraryFromKindle,
                                 onOpenClipping = { note ->
@@ -576,6 +577,51 @@ private fun KPilotApp(viewModel: MainViewModel) {
                     }
                 }
             }
+        }
+    }
+
+    val canShowReadingErrors = when (destination) {
+        Destination.NOTES -> !showingNoteDetail && !state.clippingReviewPresented && !state.notesBookPickerVisible
+        Destination.VOCABULARY -> !state.vocabularyReviewPresented && state.selectedVocabularyKey == null
+        Destination.LIBRARY -> state.libraryRepairingPath == null && state.libraryRepairMessage == null &&
+            state.libraryDeletingPath == null && state.libraryDeleteMessage == null
+        else -> false
+    }
+    if (canShowReadingErrors && state.collision == null && !state.noteConflictReviewOpen &&
+        !state.notesSyncing && !state.vocabularySyncing && !state.librarySyncing && !state.learningSyncing
+    ) {
+        val messages = listOfNotNull(
+            state.notesMessage.takeIf { state.notesError },
+            state.vocabularyMessage.takeIf { state.vocabularyError },
+            state.libraryError,
+            state.learningMessage.takeIf { state.learningError }
+        ).distinct()
+        if (messages.isNotEmpty()) {
+            val codes = listOfNotNull(
+                state.notesDiagnosticCode.takeIf { state.notesError },
+                state.vocabularyDiagnosticCode.takeIf { state.vocabularyError }
+            ).distinct()
+            AlertDialog(
+                onDismissRequest = {},
+                properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+                title = { Text("操作失败") },
+                text = {
+                    Column(
+                        Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        messages.forEach { Text(it) }
+                        codes.forEach { code ->
+                            TextButton(onClick = { copyDiagnosticCode(context, code) }) {
+                                Text("诊断码 $code · 点按复制")
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.dismissReadingErrors(state) }) { Text("确定") }
+                }
+            )
         }
     }
 }
@@ -752,17 +798,15 @@ private fun NotesScreen(viewModel: MainViewModel, state: UiState, searchVisible:
                 }
             }
         }
-        if (state.notesError || searchVisible || state.learningMessage.isNotBlank()) Column(
+        val showReviewStatus = !state.learningError && state.learningMessage.isNotBlank()
+        if (searchVisible || showReviewStatus) Column(
             Modifier.padding(horizontal = readingListInset, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (state.notesError) Text(state.notesMessage, style=MaterialTheme.typography.bodySmall,
-                color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(vertical=8.dp))
-            if (state.learningMessage.isNotBlank()) Text(
+            if (showReviewStatus) Text(
                 state.learningMessage,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (state.learningError) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 4.dp)
             )
             if (searchVisible) {
@@ -950,6 +994,9 @@ private fun NoteDetail(note: KindleClipping, viewModel: MainViewModel, state: Ui
 private fun RemoteScreen(viewModel: MainViewModel, state: UiState) {
     val connected = state.connected
     val busy = state.busy || state.connectionBusy
+    val isActive = LocalTabActive.current
+    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
+    var pendingRecording by remember { mutableStateOf<FlipCommandDefinition?>(null) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 24.dp),
@@ -992,8 +1039,36 @@ private fun RemoteScreen(viewModel: MainViewModel, state: UiState) {
             SwitchRow(Icons.Filled.Watch, "小米手环",
                 if (state.xiaomiBandConnected) "已连接" else if (state.xiaomiBandEnabled) "未连接" else "",
                 state.xiaomiBandEnabled, connected, viewModel::setXiaomiBandEnabled)
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                    .clickable(role = Role.Button) { advancedExpanded = !advancedExpanded }
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Icon(Icons.Filled.Tune, null, tint = MaterialTheme.colorScheme.primary)
+                Text(if (advancedExpanded) "收起高级设置" else "高级设置",
+                    modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                Icon(if (advancedExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null)
+            }
+            if (advancedExpanded) {
+                Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp)) {
+                    FlipCommandDefinition.all.forEach { definition ->
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(definition.title, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { pendingRecording = definition }, enabled = connected && !busy) {
+                                Text(if (definition in state.missingFlipCommands) "录制" else "重新录制")
+                            }
+                        }
+                    }
+                }
+            }
         }
-        if (!connected || state.missingFlipCommands.isNotEmpty()) {
+        if (!connected || (!advancedExpanded && state.missingFlipCommands.isNotEmpty())) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     if (state.settings.host.isBlank()) "请先在设置中连接 Kindle"
@@ -1012,9 +1087,34 @@ private fun RemoteScreen(viewModel: MainViewModel, state: UiState) {
         }
         if (state.isError) Text(state.status, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
-    if (LocalTabActive.current && state.remoteRecordingCommandId != null) AlertDialog(
+    if (isActive) pendingRecording?.let { definition ->
+        AlertDialog(
+            onDismissRequest = { pendingRecording = null },
+            title = { Text("录制${definition.title}") },
+            text = {
+                Text("点按开始后，请在 5 秒内到 Kindle 上执行一次${definition.title}手势。旧录制会被替换。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingRecording = null
+                        viewModel.recordFlipCommand(definition)
+                    },
+                    enabled = connected && !busy
+                ) { Text("开始录制") }
+            },
+            dismissButton = { TextButton(onClick = { pendingRecording = null }) { Text("取消") } }
+        )
+    }
+    if (isActive && state.remoteRecordingCommandId != null) AlertDialog(
         onDismissRequest = {}, title = { Text("正在录制") },
-        text = { LinearProgressIndicator(Modifier.fillMaxWidth()) }, confirmButton = {}
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("请现在到 Kindle 上执行一次对应的翻页手势，录制将在 5 秒后自动结束。")
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {}
     )
 }
 
@@ -1096,7 +1196,7 @@ private fun CompactErrorBanner(
 
 private fun copyDiagnosticCode(context: Context, code: String) {
     context.getSystemService(ClipboardManager::class.java)
-        .setPrimaryClip(ClipData.newPlainText("KPilot 摘抄诊断码", code))
+        .setPrimaryClip(ClipData.newPlainText("KPilot", code))
 }
 
 private fun ClippingsExportFormat.menuLabel() = when (this) {

@@ -372,13 +372,18 @@ data class ClippingsFormatIssue(val recordBlocks: Int, val unrecognizedBlocks: I
 object ClippingsValidation {
     fun inspect(bytes: ByteArray, currentHighlights: Set<String> = emptySet()): Pair<ClippingsParseResult, ClippingsFormatIssue?> {
         val result = ClippingsParser.parseDetailed(ClippingsTextDecoder.decode(bytes), currentHighlights = currentHighlights)
-        if (result.isBlank) return result to null
+        return result to issue(result)
+    }
+
+    /** Checks an already parsed result so callers can validate and reuse one parse pass. */
+    fun issue(result: ClippingsParseResult): ClippingsFormatIssue? {
+        if (result.isBlank) return null
         if (!result.hasSeparator || !result.hasTrailingSeparator) {
-            return result to ClippingsFormatIssue(result.recordBlocks, result.unrecognizedBlocks, ClippingsFormatIssue.Reason.INCOMPLETE)
+            return ClippingsFormatIssue(result.recordBlocks, result.unrecognizedBlocks, ClippingsFormatIssue.Reason.INCOMPLETE)
         }
         if (result.recordBlocks > 0 && result.unrecognizedBlocks == result.recordBlocks) {
-            return result to ClippingsFormatIssue(result.recordBlocks, result.unrecognizedBlocks, ClippingsFormatIssue.Reason.UNRECOGNIZED)
+            return ClippingsFormatIssue(result.recordBlocks, result.unrecognizedBlocks, ClippingsFormatIssue.Reason.UNRECOGNIZED)
         }
-        return result to null
+        return null
     }
 }

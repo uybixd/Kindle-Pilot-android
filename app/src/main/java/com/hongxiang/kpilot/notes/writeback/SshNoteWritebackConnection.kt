@@ -1,7 +1,9 @@
 package com.hongxiang.kpilot.notes.writeback
 
+import android.util.Log
 import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.ssh.KindleSshSessionFactory
+import com.hongxiang.kpilot.support.SyncTrace
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.Session
 import java.io.ByteArrayInputStream
@@ -19,6 +21,43 @@ internal class SshNoteWritebackConnection(private val settings: ConnectionSettin
 
     override fun exec(command: String): String = execute(command).toString(Charsets.UTF_8).trim()
     override fun download(path: String): ByteArray = execute("cat ${quote(path)}")
+
+    override fun downloadMany(paths: List<String>): List<ByteArray> {
+        if (paths.size <= 1) return paths.map(::download)
+        val command = buildString {
+            append("for f in")
+            paths.forEach { append(' ').append(quote(it)) }
+            // NUL-terminated path, a decimal byte count, then exactly that many raw bytes.
+            // Binary sidecar content is never scanned for delimiters.
+            append("; do printf '%s\\000' \"\$f\"; wc -c < \"\$f\"; cat \"\$f\"; done")
+        }
+        val output = execute(command)
+        return parseBatch(output, paths.size).also {
+            runCatching { Log.i(SyncTrace.TAG, "sidecar-batch files=${paths.size} bytes=${output.size}") }
+        }
+    }
+
+    private fun parseBatch(bytes: ByteArray, expected: Int): List<ByteArray> {
+        val result = ArrayList<ByteArray>(expected)
+        var index = 0
+        while (index < bytes.size) {
+            var pathEnd = index
+            while (pathEnd < bytes.size && bytes[pathEnd] != 0.toByte()) pathEnd++
+            check(pathEnd < bytes.size) { "Kindle 批量读取响应缺少路径分隔符" }
+            index = pathEnd + 1
+            var sizeEnd = index
+            while (sizeEnd < bytes.size && bytes[sizeEnd] != '\n'.code.toByte()) sizeEnd++
+            check(sizeEnd < bytes.size) { "Kindle 批量读取响应缺少文件长度" }
+            val size = String(bytes, index, sizeEnd - index, Charsets.US_ASCII).trim().toIntOrNull()
+            check(size != null && size >= 0) { "Kindle 批量读取响应包含无效文件长度" }
+            index = sizeEnd + 1
+            check(size <= bytes.size - index) { "Kindle 批量读取响应不完整" }
+            result += bytes.copyOfRange(index, index + size)
+            index += size
+        }
+        check(result.size == expected) { "Kindle 批量读取响应数量不匹配" }
+        return result
+    }
 
     override fun replace(path: String, original: ByteArray, updated: ByteArray, backup: String) {
         val token = UUID.randomUUID().toString()

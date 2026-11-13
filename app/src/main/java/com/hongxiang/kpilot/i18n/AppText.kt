@@ -194,7 +194,6 @@ private val chineseToEnglish = mapOf(
     "当前没有可学的单词，跳过的单词下次打开时会重新加入。" to "No words to study right now; skipped words will return next time.",
     "新词和当前到期的单词已学完，可以休息了。" to "New and due words are finished. Take a break.",
     "先休息" to "Rest",
-    "先在心里回忆词义，再显示答案" to "Recall the meaning, then reveal the answer",
     "还没有释义，可以稍后在生词详情中补充。" to "No definition yet; add one later in the word details.",
     "上下文" to "Context",
     "忘记" to "Again",
@@ -207,16 +206,14 @@ private val chineseToEnglish = mapOf(
     "已有释义" to "Has a definition",
     "释义" to "Definition",
     "系统词典" to "System dictionary",
-    "还没有释义，可以在这里补充" to "No definition yet. Add one here.",
+    "自定义释义" to "Custom definition",
+    "Wiktionary 贡献者" to "Wiktionary contributors",
     "保存释义" to "Save definition",
     "桌面小组件" to "Home screen widget",
     "每日收藏" to "Daily favorite",
     "小组件样式" to "Widget style",
-    "纸面风" to "Paper",
+    "默认" to "Default",
     "终端风" to "Terminal",
-    "添加到桌面" to "Add to home screen",
-    "请在系统提示中确认添加" to "Confirm adding the widget in the system prompt",
-    "当前桌面不支持直接添加小组件" to "This launcher cannot add widgets directly",
     "长按主屏幕，添加 KPilot「每日收藏」小组件。请先在摘抄中收藏笔记。" to "Long-press the home screen and add the KPilot “Daily favorite” widget. Favorite a note in Clippings first.",
     "小组件每天自动更换一条收藏；点右下角箭头可立即切换。" to "The widget rotates to another favorite each day; tap the arrow to switch now.",
     "回顾数据已同步" to "Review data synced",
@@ -375,7 +372,7 @@ private val chineseToEnglish = mapOf(
     "收起原始信息" to "Hide original details",
     "还没有生词" to "No vocabulary yet",
     "点按右上角同步 Kindle 生词本" to "Tap Sync at the top right to read Vocabulary Builder",
-    "搜索单词、书名或上下文" to "Search words, titles, or context",
+    "搜索单词、释义、书名或上下文" to "Search words, definitions, titles, or context",
     "按字母" to "Alphabetical",
     "按查询次数" to "By lookup count",
     "没有找到单词" to "No words found",
@@ -391,6 +388,8 @@ private val chineseToEnglish = mapOf(
     "蓝牙键盘方向键" to "Bluetooth keyboard arrows",
     "↑、← 上一页，↓、→ 下一页" to "↑/← previous; ↓/→ next",
     "小米手环" to "Xiaomi Smart Band",
+    "终端绿" to "Terminal green",
+    "终端琥珀" to "Terminal amber",
     "手机已连接" to "Phone connected",
     "等待手环连接" to "Waiting for band",
     "未开启" to "Off",
@@ -633,6 +632,9 @@ private fun dynamicEnglish(value: String): String? {
         ?: replace("^缺少 (\\d+) 个命令。点按录制后，请在 5 秒内操作 Kindle。$", { "${it.groupValues[1]} commands are missing. Tap Record, then perform the gesture on Kindle within 5 seconds." })
         ?: replace("^已导出至 (.+)$", { "Exported to ${it.groupValues[1]}" })
         ?: replace("^已检测到 (.+)$", { "Detected ${it.groupValues[1]}" })
+        ?: replace("^未采集到触控事件，请保持 Kindle 亮屏并在 (\\d+) 秒内执行翻页手势$", {
+            "No touch events captured. Keep the Kindle screen awake and perform the page-turn gesture within ${it.groupValues[1]} seconds."
+        })
         ?: replace("^(.+) 已发送$", { "${it.groupValues[1]} sent" })
         ?: replace("^已跳过 (.+)$", { "Skipped ${it.groupValues[1]}" })
         ?: replace("^导出 (.+)$", { "Export ${it.groupValues[1]}" })

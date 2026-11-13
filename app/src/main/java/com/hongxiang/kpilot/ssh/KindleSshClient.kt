@@ -7,6 +7,7 @@ import com.hongxiang.kpilot.remote.remoteEventName
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.Session
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 internal data class OrientationResult(val orientation: String, val usedPortraitFallback: Boolean)
 
@@ -81,15 +82,10 @@ class KindleSshClient {
     ): String = withConnectedSession(settings) { session ->
         require(durationSeconds in 1..15)
         val event = resolveEventDevice(settings, session)
-        val eventPath = "/dev/input/$event"
-        val remotePath = definition.remotePath
         execute(
             session,
-            "mkdir -p /mnt/us/FlipCmd; " +
-                "rm -f ${shellQuote(remotePath)}; " +
-                "timeout $durationSeconds cat ${shellQuote(eventPath)} > ${shellQuote(remotePath)} 2>/dev/null; " +
-                "test -s ${shellQuote(remotePath)} && { echo recorded; exit 0; }; " +
-                "echo '录制为空，请重试并在 5 秒内操作 Kindle' >&2; exit 45"
+            recordFlipCommandScript("/dev/input/$event", definition.remotePath, durationSeconds),
+            commandTimeoutMs = TIMEOUT_MS + durationSeconds * 1_000L
         )
         "${definition.title}录制完成"
     }
@@ -152,7 +148,11 @@ class KindleSshClient {
         session = null
     }
 
-    private fun execute(session: Session, command: String): String {
+    private fun execute(
+        session: Session,
+        command: String,
+        commandTimeoutMs: Long = TIMEOUT_MS.toLong()
+    ): String {
         val channel = session.openChannel("exec") as ChannelExec
         val stdout = ByteArrayOutputStream()
         val stderr = ByteArrayOutputStream()
@@ -161,7 +161,7 @@ class KindleSshClient {
         channel.setErrStream(stderr)
         try {
             channel.connect(TIMEOUT_MS)
-            val deadline = System.currentTimeMillis() + TIMEOUT_MS
+            val deadline = System.currentTimeMillis() + commandTimeoutMs
             while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(CHANNEL_POLL_MS)
             check(channel.isClosed) { "Kindle command timed out" }
             check(channel.exitStatus == 0) {
@@ -172,8 +172,6 @@ class KindleSshClient {
             channel.disconnect()
         }
     }
-
-    private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
 
     companion object {
         internal fun detectOrientation(fbset: String): String {
@@ -203,10 +201,58 @@ class KindleSshClient {
             }
         }
 
-        internal fun detectTouchDevice(devices: String): String? = devices
-            .split(Regex("(?m)(?=^I:)"))
-            .firstOrNull { it.contains("N: Name=\"pt_mt\"") && it.contains(Regex("(?m)^B: ABS=")) }
-            ?.let { Regex("event\\d+").find(it)?.value }
+        internal fun detectTouchDevice(devices: String): String? = INPUT_DEVICE_HEADER
+            .splitToSequence(devices)
+            .filter { TOUCH_DEVICE_NAME.containsMatchIn(it) && ABS_CAPABILITIES.containsMatchIn(it) }
+            .mapNotNull { device ->
+                INPUT_HANDLERS.find(device)?.groupValues?.get(1)
+                    ?.splitToSequence(' ', '\t')
+                    ?.firstOrNull(EVENT_HANDLER::matches)
+            }
+            .firstOrNull()
+
+        // Stop the background reader from the shell since timeout syntax varies across Kindle firmware.
+        internal fun recordFlipCommandScript(eventPath: String, remotePath: String, durationSeconds: Int): String {
+            val temporaryPath = "$remotePath.tmp-${UUID.randomUUID()}"
+            return """
+                mkdir -p ${shellQuote(remotePath.substringBeforeLast('/'))} || exit
+                tmp=${shellQuote(temporaryPath)}
+                reader=
+                cleanup() {
+                    if [ -n "${'$'}reader" ]; then
+                        kill "${'$'}reader" 2>/dev/null
+                        wait "${'$'}reader" 2>/dev/null
+                    fi
+                    rm -f "${'$'}tmp"
+                }
+                trap cleanup 0
+                trap 'exit 1' HUP INT TERM
+                exec cat ${shellQuote(eventPath)} > "${'$'}tmp" &
+                reader=$!
+                sleep $durationSeconds || exit
+                kill "${'$'}reader" 2>/dev/null
+                wait "${'$'}reader" 2>/dev/null
+                status=$?
+                reader=
+                case "${'$'}status" in
+                    0|143) ;;
+                    *) exit "${'$'}status" ;;
+                esac
+                if [ ! -s "${'$'}tmp" ]; then
+                    echo '未采集到触控事件，请保持 Kindle 亮屏并在 $durationSeconds 秒内执行翻页手势' >&2
+                    exit 45
+                fi
+                mv -f "${'$'}tmp" ${shellQuote(remotePath)}
+            """.trimIndent()
+        }
+
+        private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
+
+        private val INPUT_DEVICE_HEADER = Regex("""(?m)(?=^I:)""")
+        private val TOUCH_DEVICE_NAME = Regex("""(?m)^N: Name="(?:pt_mt|goodix-ts)"$""", RegexOption.IGNORE_CASE)
+        private val ABS_CAPABILITIES = Regex("""(?m)^B: ABS=""")
+        private val INPUT_HANDLERS = Regex("""(?m)^H: Handlers=([^\r\n]*)""")
+        private val EVENT_HANDLER = Regex("""event[0-9]+""")
 
         private const val TIMEOUT_MS = 10_000
         private const val CHANNEL_POLL_MS = 5L

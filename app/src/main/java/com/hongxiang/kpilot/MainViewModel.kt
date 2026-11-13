@@ -53,6 +53,7 @@ import com.hongxiang.kpilot.remote.AccessibilityStatus
 import com.hongxiang.kpilot.remote.FlipCommandDefinition
 import com.hongxiang.kpilot.remote.RemoteCommandDispatcher
 import com.hongxiang.kpilot.remote.ScreenOffRemoteService
+import com.hongxiang.kpilot.support.SyncTrace
 import com.hongxiang.kpilot.review.ClippingReviewAction
 import com.hongxiang.kpilot.review.ClippingReviewRecord
 import com.hongxiang.kpilot.review.ClippingReviewUndo
@@ -194,6 +195,7 @@ data class UiState(
     val vocabularyReviewPresented: Boolean = false,
     val vocabularyReviewUndo: VocabularyReviewUndo? = null,
     val vocabularyDefinitions: Map<String, VocabularyDefinition> = emptyMap(),
+    val learningLoaded: Boolean = false,
     val learningSyncing: Boolean = false,
     val learningMessage: String = "",
     val learningError: Boolean = false
@@ -203,6 +205,7 @@ enum class NotesSortOrder { LOCATION, ADDED_AT }
 
 /** Avoid repeating a failed identity lookup for every concurrent/offline sync. */
 private const val IDENTITY_RETRY_MS = 30_000L
+private const val LEARNING_SYNC_NOTICE_MS = 5_000L
 
 class MainViewModel(application: Application) : AndroidViewModel(application), CommandSink {
     private val store = SecureSettingsStore(application)
@@ -225,6 +228,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     private val learningSyncService = LearningSyncService()
     private val phoneId by lazy { preferences.phoneId }
     private val learningSaveMutex = Mutex()
+    private var learningSyncNoticeTimer: Job? = null
     private val favoriteWidgetStore = FavoriteWidgetStore(application)
     private val favoriteWidgetLock = Any()
     private val displayedReviewIds = mutableSetOf<String>()
@@ -310,6 +314,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             displayedReviewIds.clear()
             vocabularyReviewSkippedKeys.clear()
             clippingReviewUndoTimer?.cancel()
+            learningSyncNoticeTimer?.cancel()
         }
         mutableState.update {
             if (changedDevice) it.copy(
@@ -317,8 +322,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                 libraryRepairingPath = null, libraryRepairMessage = null, libraryRepairError = false,
                 libraryDeletingPath = null, libraryDeleteMessage = null, libraryDeleteError = false,
                 notes = emptyList(), notesLastSync = null, selectedBook = null, selectedNoteId = null,
-                notesMessage = "从 Kindle 同步摘抄", notesError = false,
-                vocabularyWords = emptyList(), vocabularyLastSync = null, selectedVocabularyKey = null, vocabularyError = false,
+                notesMessage = "从 Kindle 同步摘抄", notesError = false, notesDiagnosticCode = null, notesDiagnosticStage = null,
+                vocabularyWords = emptyList(), vocabularyLastSync = null, selectedVocabularyKey = null,
+                vocabularyError = false, vocabularyDiagnosticCode = null,
                 noteDrafts = emptyMap(), noteDraftsLoading = true, noteDraftsAvailable = false,
                 noteWriteMessage = "", noteWriteError = false, noteConflicts = emptyMap(), noteConflictReviewOpen = false,
                 clippingReviewRecords = emptyMap(), clippingReviewDeck = emptyList(),
@@ -327,7 +333,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                 vocabularyReviewRecords = emptyMap(), vocabularyReviewKey = null,
                 vocabularyReviewPresented = false, vocabularyReviewUndo = null,
                 vocabularyDefinitions = emptyMap(),
-                learningMessage = "", learningError = false
+                learningLoaded = false, learningMessage = "", learningError = false
             ) else it.copy(settings = settings, isError = false)
         }
         if (changedDevice) loadDeviceData(settings)
@@ -340,10 +346,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                 if (migrateLegacy) vocabularyService.migrateLegacyCache(settings)
                 vocabularyService.loadCached(settings)
             } }.onSuccess { snapshot ->
-                if (state.value.settings.cacheScope() == scope && snapshot != null &&
-                    (state.value.vocabularyLastSync == null || !snapshot.syncedAt.isBefore(state.value.vocabularyLastSync))) applyVocabularySnapshot(snapshot)
+                if (snapshot != null) applyVocabularySnapshot(scope, snapshot)
             }.onFailure { error ->
-                if (state.value.settings.cacheScope() == scope) mutableState.update { it.copy(vocabularyError = true, vocabularyMessage = error.message ?: "无法读取生词缓存") }
+                if (state.value.settings.cacheScope() == scope) mutableState.update {
+                    it.copy(
+                        vocabularyError = true,
+                        vocabularyMessage = error.message ?: "无法读取生词缓存",
+                        vocabularyDiagnosticCode = null
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -359,7 +370,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                 }
             }.onFailure { error ->
                 if (state.value.settings.cacheScope() == scope) mutableState.update {
-                    it.copy(notesError = true, notesMessage = error.message ?: "无法读取摘抄缓存")
+                    it.copy(
+                        notesError = true,
+                        notesMessage = error.message ?: "无法读取摘抄缓存",
+                        notesDiagnosticCode = null,
+                        notesDiagnosticStage = null
+                    )
                 }
             }
         }
@@ -372,14 +388,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
         viewModelScope.launch {
             val learning = withContext(Dispatchers.IO) { learningStore.load(scope) }
             if (state.value.settings.cacheScope() == scope) mutableState.update {
-                if (it.clippingReviewRecords.isEmpty() && it.vocabularyReviewRecords.isEmpty() &&
-                    it.vocabularyDefinitions.isEmpty()
-                ) it.copy(
-                    clippingReviewRecords = learning.clippingReviews,
-                    clippingReviewDailyCounts = learning.clippingDailyCounts,
-                    vocabularyReviewRecords = learning.vocabularyReviews,
-                    vocabularyDefinitions = learning.definitions
-                ) else it
+                if (it.learningLoaded) return@update it
+                val loaded = LearningMerge.merge(it.learningSnapshot(), learning)
+                it.copy(
+                    learningLoaded = true,
+                    clippingReviewRecords = loaded.clippingReviews,
+                    clippingReviewDailyCounts = learning.clippingDailyCounts + it.clippingReviewDailyCounts,
+                    vocabularyReviewRecords = loaded.vocabularyReviews,
+                    vocabularyDefinitions = loaded.definitions
+                )
             }
             refreshFavoriteWidget()
         }
@@ -479,6 +496,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     fun syncLearning() {
         if (state.value.learningSyncing || state.value.localDataBusy) return
         val settings = state.value.settings
+        learningSyncNoticeTimer?.cancel()
         mutableState.update { it.copy(learningSyncing = true, learningMessage = "", learningError = false) }
         viewModelScope.launch {
             val activeSettings = ensureKindleIdentity(settings)
@@ -489,15 +507,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                     learningSyncService.sync(activeSettings, local)
                 }
                 val current = state.value
-                if (current.settings.cacheScope() != scope) return@runCatching scope to null
+                if (current.settings.cacheScope() != scope) return@runCatching
                 // A review can finish while the SSH round trip is running. Merge the
                 // current in-memory state again so the result never loses a local action.
                 val finalState = LearningMerge.merge(current.learningSnapshot(), merged)
                 mutableState.update {
                     it.copy(
-                        learningSyncing = false,
-                        learningMessage = "回顾数据已同步",
-                        learningError = false,
                         clippingReviewRecords = finalState.clippingReviews,
                         clippingReviewDailyCounts = finalState.clippingDailyCounts,
                         vocabularyReviewRecords = finalState.vocabularyReviews,
@@ -506,11 +521,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
                 }
                 refreshFavoriteWidget()
                 saveLearning(scope, finalState)
-                scope to finalState
-            }.onSuccess { (resultScope, finalState) ->
-                if (finalState == null || state.value.settings.cacheScope() != resultScope) {
-                    mutableState.update { it.copy(learningSyncing = false) }
-                }
+            }.onSuccess {
+                if (state.value.settings.cacheScope() == scope) {
+                    mutableState.update { it.copy(learningSyncing = false, learningMessage = "回顾数据已同步") }
+                    learningSyncNoticeTimer = viewModelScope.launch {
+                        delay(LEARNING_SYNC_NOTICE_MS)
+                        mutableState.update { it.copy(learningMessage = "") }
+                    }
+                } else mutableState.update { it.copy(learningSyncing = false) }
             }.onFailure { error ->
                 if (state.value.settings.cacheScope() == scope) mutableState.update {
                     it.copy(
@@ -892,24 +910,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
         persistLearning()
     }
 
-    fun vocabularyReviewQueue(now: Long = System.currentTimeMillis()): VocabularyReviewQueue =
+    fun vocabularyReviewQueue(now: Long = System.currentTimeMillis()): VocabularyReviewQueue = with(state.value) {
         VocabularyReviewPlanner.makeQueue(
-            state.value.vocabularyWords.map { it.key },
-            state.value.vocabularyReviewRecords,
+            vocabularyWords.map { it.key },
+            vocabularyReviewRecords,
             vocabularyReviewSkippedKeys,
             now
         )
+    }
 
     fun vocabularyReviewSkippedCount(): Int = vocabularyReviewSkippedKeys.size
 
     fun presentVocabularyReview() {
-        if (state.value.vocabularyWords.isEmpty()) return
+        val current = state.value
+        if (!current.learningLoaded || current.vocabularyWords.isEmpty() || current.vocabularyReviewPresented) return
         vocabularyReviewSkippedKeys.clear()
-        val queue = vocabularyReviewQueue()
+        val next = vocabularyReviewQueue().draw()
         mutableState.update {
             it.copy(
                 vocabularyReviewPresented = true,
-                vocabularyReviewKey = queue.wordKeys.firstOrNull(),
+                vocabularyReviewKey = next,
                 vocabularyReviewUndo = null
             )
         }
@@ -918,7 +938,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     fun refreshVocabularyReview(now: Long = System.currentTimeMillis()) {
         val current = state.value
         if (!current.vocabularyReviewPresented || current.vocabularyReviewKey != null) return
-        val next = vocabularyReviewQueue(now).wordKeys.firstOrNull() ?: return
+        val next = vocabularyReviewQueue(now).draw() ?: return
         mutableState.update { it.copy(vocabularyReviewKey = next) }
     }
 
@@ -954,7 +974,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             records,
             vocabularyReviewSkippedKeys,
             now
-        ).wordKeys.firstOrNull()
+        ).draw()
         mutableState.update {
             it.copy(
                 vocabularyReviewRecords = records,
@@ -1260,7 +1280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
         val bytes = localData.readImport(uri)
         if (vocabulary) {
             val snapshot = vocabularyService.importBytes(settings,bytes)
-            if (state.value.settings.cacheScope() == settings.cacheScope()) applyVocabularySnapshot(snapshot)
+            applyVocabularySnapshot(settings.cacheScope(), snapshot)
         } else {
             val snapshot = clippingsService.importWrittenBytes(settings,bytes)
             if (state.value.settings.cacheScope() == settings.cacheScope()) applyNotesSnapshot(snapshot)
@@ -1276,7 +1296,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             libraryCovers.clear()
             preferences.navigationItems = NavigationOptions.defaults
             mutableState.value = UiState(profiles = profiles.all(), activeProfileId = profiles.activeId,
-                navigationItems = NavigationOptions.defaults, noteDraftsLoading = false, noteDraftsAvailable = true)
+                navigationItems = NavigationOptions.defaults, noteDraftsLoading = false, noteDraftsAvailable = true,
+                learningLoaded = true)
             synchronized(favoriteWidgetLock) {
                 favoriteWidgetStore.clear()
                 FavoriteWidgetProvider.updateAll(getApplication())
@@ -1646,53 +1667,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     private suspend fun reconcileKindleAnnotations(
         settings: ConnectionSettings, snapshot: ClippingsSnapshot
     ): ClippingsSnapshot {
-        val scope = settings.cacheScope()
-        val current = state.value
-        if (current.settings.cacheScope() != scope || !current.noteDraftsAvailable) return snapshot
-        val synced = current.noteDrafts.filterValues { !it.needsSync }
-        val clippings = snapshot.sourceHighlights
-        if (clippings.isEmpty()) return snapshot
+        val span = SyncTrace.begin("notes-annotations")
         try {
-            val annotations = withContext(Dispatchers.IO) { writebackService.readCurrentAnnotations(settings, clippings) }
-            val (updated, projected) = draftMutex.withLock {
-                withContext(Dispatchers.IO) {
-                    val drafts = noteDraftStore.load(scope).toMutableMap()
-                    val pendingIds = drafts.values.filter { it.needsSync }.map { it.clippingId }.toSet()
-                    clippingsService.rememberRemovedHighlights(
-                        settings, annotations.checkedHighlights, annotations.removedHighlights - pendingIds
-                    )
-                    val projected = clippingsService.hideRemovedHighlights(settings, snapshot)
-                    var changed = false
-                    projected.items.forEach { clipping ->
-                        val id = clipping.id
-                        val text = annotations.notes[id] ?: return@forEach
-                        val draft = drafts[id]
-                        if (draft == synced[id]) {
-                            val verified = rememberKindleNoteBaseline(id, draft, text, clipping.kindleNotes.isNotEmpty())
-                            if (verified != null && verified != draft) {
-                                drafts[id] = verified
-                                changed = true
+            val scope = settings.cacheScope()
+            val current = state.value
+            if (current.settings.cacheScope() != scope || !current.noteDraftsAvailable) return snapshot
+            val synced = current.noteDrafts.filterValues { !it.needsSync }
+            val clippings = snapshot.sourceHighlights
+            if (clippings.isEmpty()) return snapshot
+            try {
+                val annotations = withContext(Dispatchers.IO) { writebackService.readCurrentAnnotations(settings, clippings) }
+                span.mark("read_annotations")
+                val (updated, projected) = draftMutex.withLock {
+                    withContext(Dispatchers.IO) {
+                        val drafts = noteDraftStore.load(scope).toMutableMap()
+                        val pendingIds = drafts.values.filter { it.needsSync }.map { it.clippingId }.toSet()
+                        clippingsService.rememberRemovedHighlights(
+                            settings, annotations.checkedHighlights, annotations.removedHighlights - pendingIds
+                        )
+                        val projected = clippingsService.hideRemovedHighlights(settings, snapshot)
+                        var changed = false
+                        projected.items.forEach { clipping ->
+                            val id = clipping.id
+                            val text = annotations.notes[id] ?: return@forEach
+                            val draft = drafts[id]
+                            if (draft == synced[id]) {
+                                val verified = rememberKindleNoteBaseline(id, draft, text, clipping.kindleNotes.isNotEmpty())
+                                if (verified != null && verified != draft) {
+                                    drafts[id] = verified
+                                    changed = true
+                                }
                             }
                         }
+                        if (changed) noteDraftStore.save(scope, drafts)
+                        drafts.toMap() to projected
                     }
-                    if (changed) noteDraftStore.save(scope, drafts)
-                    drafts.toMap() to projected
+                }
+                span.mark("drafts_hide")
+                mutableState.update { if (it.settings.cacheScope() == scope) it.copy(noteDrafts = updated) else it }
+                return projected
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w("KPilotNotes", "Cannot refresh saved Kindle notes", error)
+                return withContext(Dispatchers.IO) {
+                    runCatching { clippingsService.hideRemovedHighlights(settings, snapshot) }.getOrDefault(snapshot)
                 }
             }
-            mutableState.update { if (it.settings.cacheScope() == scope) it.copy(noteDrafts = updated) else it }
-            return projected
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.w("KPilotNotes", "Cannot refresh saved Kindle notes", error)
-            return withContext(Dispatchers.IO) {
-                runCatching { clippingsService.hideRemovedHighlights(settings, snapshot) }.getOrDefault(snapshot)
-            }
+        } finally {
+            span.end("highlights=${snapshot.sourceHighlights.size}")
         }
     }
 
     fun updateNotesQuery(query: String) {
         mutableState.update { it.copy(notesQuery = query, selectedNoteId = null) }
+    }
+
+    fun dismissReadingErrors(shown: UiState) {
+        mutableState.update { current ->
+            if (current.settings.cacheScope() != shown.settings.cacheScope()) return@update current
+            val dismissNotes = shown.notesError && current.notesMessage == shown.notesMessage &&
+                current.notesDiagnosticCode == shown.notesDiagnosticCode
+            val dismissVocabulary = shown.vocabularyError && current.vocabularyMessage == shown.vocabularyMessage &&
+                current.vocabularyDiagnosticCode == shown.vocabularyDiagnosticCode
+            val dismissLearning = shown.learningError && current.learningError &&
+                current.learningMessage == shown.learningMessage
+            current.copy(
+                notesError = current.notesError && !dismissNotes,
+                notesDiagnosticCode = if (dismissNotes) null else current.notesDiagnosticCode,
+                notesDiagnosticStage = if (dismissNotes) null else current.notesDiagnosticStage,
+                vocabularyError = current.vocabularyError && !dismissVocabulary,
+                vocabularyDiagnosticCode = if (dismissVocabulary) null else current.vocabularyDiagnosticCode,
+                libraryError = current.libraryError?.takeUnless { it == shown.libraryError },
+                learningError = current.learningError && !dismissLearning,
+                learningMessage = if (dismissLearning) "" else current.learningMessage
+            )
+        }
     }
 
     fun selectNotesBook(book: String?) {
@@ -1742,7 +1792,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }.onSuccess { path ->
         mutableState.update { it.copy(notesMessage = "已导出至 $path", notesError = false) }
     }.onFailure { error ->
-        mutableState.update { it.copy(notesMessage = error.message ?: "无法创建导出文件", notesError = true) }
+        mutableState.update {
+            it.copy(
+                notesMessage = error.message ?: "无法创建导出文件",
+                notesError = true,
+                notesDiagnosticCode = null,
+                notesDiagnosticStage = null
+            )
+        }
     }.getOrNull()
 
     private fun applyNotesSnapshot(snapshot: ClippingsSnapshot) {
@@ -1787,7 +1844,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
             }.fold(
                 onSuccess = { snapshot ->
                     if (state.value.settings.cacheScope() != scope) { mutableState.update { it.copy(vocabularySyncing = false) }; return@fold }
-                    applyVocabularySnapshot(snapshot)
+                    applyVocabularySnapshot(scope, snapshot)
                     mutableState.update {
                         it.copy(
                             vocabularySyncing = false,
@@ -1826,15 +1883,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     }
 
     fun visibleVocabularyWords(): List<VocabularyWord> {
-        val query = state.value.vocabularyQuery.trim()
-        val definitions = state.value.vocabularyDefinitions
-        val visible = state.value.vocabularyWords.filter { word ->
+        val current = state.value
+        val query = current.vocabularyQuery.trim()
+        val definitions = current.vocabularyDefinitions
+        val visible = current.vocabularyWords.filter { word ->
             query.isEmpty() || word.displayWord.contains(query, true) ||
-                definitions[word.key]?.definition?.contains(query, true) == true || word.lookups.any {
+                definitions[word.key]?.definition?.contains(query, true) == true ||
+                word.dictionaryEntry?.senses?.any { it.gloss.contains(query, true) } == true || word.lookups.any {
                     listOf(it.bookTitle, it.authors, it.usage).any { field -> field.contains(query, true) }
                 }
         }
-        return VocabularyOrdering.sort(visible, state.value.vocabularySortOrder)
+        return VocabularyOrdering.sort(visible, current.vocabularySortOrder)
     }
 
     fun createVocabularyExport(format: VocabularyExportFormat): String? = runCatching {
@@ -1849,17 +1908,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
         }
     }.onFailure { error ->
         mutableState.update {
-            it.copy(vocabularyMessage = error.message ?: "无法创建生词导出文件", vocabularyError = true)
+            it.copy(
+                vocabularyMessage = error.message ?: "无法创建生词导出文件",
+                vocabularyError = true,
+                vocabularyDiagnosticCode = null
+            )
         }
     }.getOrNull()
 
-    private fun applyVocabularySnapshot(snapshot: VocabularySnapshot) {
+    private fun applyVocabularySnapshot(scope: String, snapshot: VocabularySnapshot) {
+        val words = snapshot.words
         mutableState.update {
+            if (it.settings.cacheScope() != scope || it.vocabularyLastSync?.isAfter(snapshot.syncedAt) == true) {
+                return@update it
+            }
             it.copy(
-                vocabularyWords = snapshot.words,
+                vocabularyWords = words,
                 vocabularyLastSync = snapshot.syncedAt,
-                selectedVocabularyKey = it.selectedVocabularyKey?.takeIf { key -> snapshot.words.any { word -> word.key == key } },
-                vocabularyMessage = if (snapshot.words.isEmpty()) "没有找到可用的生词" else "已载入 ${snapshot.words.size} 个生词",
+                selectedVocabularyKey = it.selectedVocabularyKey?.takeIf { key -> words.any { word -> word.key == key } },
+                vocabularyReviewKey = it.vocabularyReviewKey?.takeIf { key -> words.any { word -> word.key == key } },
+                vocabularyReviewUndo = it.vocabularyReviewUndo?.takeIf { undo -> words.any { word -> word.key == undo.wordKey } },
+                vocabularyMessage = if (words.isEmpty()) "没有找到可用的生词" else "已载入 ${words.size} 个生词",
                 vocabularyError = false
             )
         }

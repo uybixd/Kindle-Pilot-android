@@ -139,6 +139,27 @@ class KindleNoteWritebackTest {
         expectFailure { AnnotationMatcher.match(listOf(candidate), book) }
     }
 
+    @Test fun distantAnnotationWithMatchingClockTimeIsNotTreatedAsTimeZoneOffset() {
+        val store = fixture()
+        val cache = store.values.first() as KrdsValue.ObjectValue
+        val tree = cache.values[2] as KrdsValue.ObjectValue
+        // Eleven days earlier, but 0.847 s away from a 15-minute multiple of the
+        // target time. This used to be normalized into an exact timestamp match
+        // and made the fallback ambiguous.
+        val oldTime = time - 1_027_800_847L
+        tree.values[0] = KrdsValue.Integer(2)
+        tree.values.add(KrdsValue.ObjectValue("annotation.personal.highlight", mutableListOf(
+            KrdsValue.Utf("3100226"),
+            KrdsValue.Utf("3100364"),
+            KrdsValue.LongValue(oldTime),
+            KrdsValue.LongValue(oldTime),
+            KrdsValue.Utf("0￼0")
+        )))
+        val candidate = SidecarCandidate(path, store.encoded(), store)
+        val book = clipping.copy(locationStart = 500, locationEnd = 501)
+        assertEquals(time, AnnotationMatcher.match(listOf(candidate), book).highlight.creationTime)
+    }
+
     @Test fun addingNotePreservesTrailingFieldsInAnnotationCache() {
         val store = fixture()
         val cache = store.values.first() as KrdsValue.ObjectValue

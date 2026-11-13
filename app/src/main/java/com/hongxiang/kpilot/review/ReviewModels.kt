@@ -134,12 +134,19 @@ data class VocabularyReviewRecord(
 }
 
 data class VocabularyReviewQueue(
-    val wordKeys: List<String>,
-    val newCount: Int,
-    val learningCount: Int,
-    val reviewCount: Int,
+    private val dueLearning: List<String>,
+    private val dueReviews: List<String>,
+    private val newWords: List<String>,
+    private val waitingLearningCount: Int,
     val nextLearningDueAt: Long?
-)
+) {
+    val newCount: Int get() = newWords.size
+    val learningCount: Int get() = dueLearning.size + waitingLearningCount
+    val reviewCount: Int get() = dueReviews.size
+
+    fun draw(random: Random = Random.Default): String? =
+        dueLearning.randomOrNull(random) ?: dueReviews.randomOrNull(random) ?: newWords.randomOrNull(random)
+}
 
 data class VocabularyReviewUndo(
     val wordKey: String,
@@ -249,34 +256,34 @@ object VocabularyReviewPlanner {
         zone: ZoneId = ZoneId.systemDefault()
     ): VocabularyReviewQueue {
         val seen = mutableSetOf<String>()
-        val learning = mutableListOf<Pair<String, Long>>()
-        val reviews = mutableListOf<Pair<String, Long>>()
-        val new = mutableListOf<String>()
-        val waitingDue = mutableListOf<Long>()
+        val dueLearning = mutableListOf<String>()
+        val dueReviews = mutableListOf<String>()
+        val newWords = mutableListOf<String>()
+        var waitingLearningCount = 0
+        var nextLearningDueAt: Long? = null
         for (key in wordKeys) {
             if (key in excluding || !seen.add(key)) continue
             val record = records[key]
             if (record == null || record.state == VocabularyReviewState.NEW) {
-                new += key
+                newWords += key
                 continue
             }
             if (record.state == VocabularyReviewState.LEARNING ||
                 record.state == VocabularyReviewState.RELEARNING
             ) {
                 val due = record.dueAt ?: now
-                if (due <= now) learning += key to due else waitingDue += due
+                if (due <= now) {
+                    dueLearning += key
+                } else {
+                    waitingLearningCount++
+                    nextLearningDueAt = minOf(nextLearningDueAt ?: due, due)
+                }
             } else if (isDue(record, now, zone)) {
-                reviews += key to (record.dueAt ?: now)
+                dueReviews += key
             }
         }
-        learning.sortWith(compareBy({ it.second }, { it.first }))
-        reviews.sortWith(compareBy({ it.second }, { it.first }))
         return VocabularyReviewQueue(
-            wordKeys = learning.map { it.first } + reviews.map { it.first } + new,
-            newCount = new.size,
-            learningCount = learning.size + waitingDue.size,
-            reviewCount = reviews.size,
-            nextLearningDueAt = waitingDue.minOrNull()
+            dueLearning, dueReviews, newWords, waitingLearningCount, nextLearningDueAt
         )
     }
 

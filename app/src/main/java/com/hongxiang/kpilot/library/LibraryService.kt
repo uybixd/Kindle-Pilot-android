@@ -7,6 +7,7 @@ import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.data.cacheScope
 import com.hongxiang.kpilot.notes.AtomicCache
 import com.hongxiang.kpilot.ssh.KindleSshSessionFactory
+import com.hongxiang.kpilot.support.SyncTrace
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.Session
 import org.json.JSONArray
@@ -52,47 +53,60 @@ class LibraryService(context: Context) {
     }.getOrNull()
 
     fun sync(settings: ConnectionSettings): LibrarySnapshot {
-        settings.validate()
-        val scope = settings.cacheScope()
-        val directory = cacheRoot.resolve(scope)
-        check(directory.isDirectory || directory.mkdirs()) { "无法创建书库缓存目录" }
-        val oldBooks = loadCached(settings)?.books.orEmpty().associateBy { it.remotePath }
-        val session = KindleSshSessionFactory.create(settings)
+        val span = SyncTrace.begin("library")
+        var bookCount = 0
         try {
-            session.connect(CONNECT_TIMEOUT_MS)
-            optionalMetadata { archiveLegacyClippingsBackups(session) }
-            val predicates = LibraryRules.supportedExtensions.sorted().joinToString(" -o ") {
-                "-iname ${shellQuote("*.$it")}"
-            }
-            val command = "test -d /mnt/us/documents && find /mnt/us/documents -mindepth 1 \\( -name '.*' -o -type d -iname '*.sdr' \\) -prune -o -type f \\( $predicates \\) -print0"
-            val paths = execute(session, command, MAX_LIST_BYTES).toString(Charsets.UTF_8)
-                .split('\u0000').filter(LibraryRules::isBookPath).distinct()
-            val entries = optionalMetadata {
-                val temporary = File.createTempFile("catalog-", ".sqlite", directory)
-                try {
-                    temporary.writeBytes(execute(session, "cat /var/local/cc.db", MAX_CATALOG_BYTES))
-                    readCatalog(temporary)
-                } finally { temporary.delete() }
-            }.orEmpty()
-            val books = paths.map { path ->
-                val entry = entries[path]
-                val previousCover = oldBooks[path]?.coverPath?.takeIf { File(it).isFile }
-                val cover = entry?.thumbnail?.let { thumbnail ->
-                    optionalMetadata { cacheCover(session, thumbnail, directory) }
-                } ?: previousCover
-                KindleBook(
-                    remotePath = path,
-                    title = entry?.title?.takeIf(String::isNotBlank) ?: LibraryRules.fileTitle(path),
-                    author = entry?.author,
-                    coverPath = cover,
-                    percentFinished = entry?.percent?.takeIf(Double::isFinite)?.coerceIn(0.0, 100.0),
-                    contentSize = entry?.size
-                )
-            }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
-            val snapshot = LibrarySnapshot(books, Instant.now(), scope)
-            saveSnapshot(directory, snapshot)
-            return snapshot
-        } finally { session.disconnect() }
+            settings.validate()
+            val scope = settings.cacheScope()
+            val directory = cacheRoot.resolve(scope)
+            check(directory.isDirectory || directory.mkdirs()) { "无法创建书库缓存目录" }
+            val oldBooks = loadCached(settings)?.books.orEmpty().associateBy { it.remotePath }
+            val session = KindleSshSessionFactory.create(settings)
+            try {
+                span.stage("connect") { session.connect(CONNECT_TIMEOUT_MS) }
+                span.stage("legacy_backups") { optionalMetadata { archiveLegacyClippingsBackups(session) } }
+                val predicates = LibraryRules.supportedExtensions.sorted().joinToString(" -o ") {
+                    "-iname ${shellQuote("*.$it")}"
+                }
+                val command = "test -d /mnt/us/documents && find /mnt/us/documents -mindepth 1 \\( -name '.*' -o -type d -iname '*.sdr' \\) -prune -o -type f \\( $predicates \\) -print0"
+                val paths = span.stage("list") {
+                    execute(session, command, MAX_LIST_BYTES).toString(Charsets.UTF_8)
+                        .split('\u0000').filter(LibraryRules::isBookPath).distinct()
+                }
+                val entries = span.stage("catalog") {
+                    optionalMetadata {
+                        val temporary = File.createTempFile("catalog-", ".sqlite", directory)
+                        try {
+                            temporary.writeBytes(execute(session, "cat /var/local/cc.db", MAX_CATALOG_BYTES))
+                            readCatalog(temporary)
+                        } finally { temporary.delete() }
+                    }.orEmpty()
+                }
+                val books = span.stage("books") {
+                    paths.map { path ->
+                        val entry = entries[path]
+                        val previousCover = oldBooks[path]?.coverPath?.takeIf { File(it).isFile }
+                        val cover = entry?.thumbnail?.let { thumbnail ->
+                            optionalMetadata { cacheCover(session, thumbnail, directory) }
+                        } ?: previousCover
+                        KindleBook(
+                            remotePath = path,
+                            title = entry?.title?.takeIf(String::isNotBlank) ?: LibraryRules.fileTitle(path),
+                            author = entry?.author,
+                            coverPath = cover,
+                            percentFinished = entry?.percent?.takeIf(Double::isFinite)?.coerceIn(0.0, 100.0),
+                            contentSize = entry?.size
+                        )
+                    }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+                }
+                bookCount = books.size
+                val snapshot = LibrarySnapshot(books, Instant.now(), scope)
+                span.stage("save") { saveSnapshot(directory, snapshot) }
+                return snapshot
+            } finally { session.disconnect() }
+        } finally {
+            span.end("books=$bookCount")
+        }
     }
 
     /**

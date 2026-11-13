@@ -42,9 +42,7 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         when (intent.action) {
-            ACTION_NEXT -> {
-                if (FavoriteWidgetStore(context).advance()) updateAll(context)
-            }
+            ACTION_NEXT -> updateAll(context, advance = true)
             ACTION_DAILY_REFRESH,
             Intent.ACTION_DATE_CHANGED,
             Intent.ACTION_TIME_CHANGED,
@@ -72,22 +70,27 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
         private const val NEXT_TOUCH_DP = 56
 
         /** Called by the app when favorites or the selected style changes. */
-        fun updateAll(context: Context) {
+        fun updateAll(context: Context, advance: Boolean = false) {
             val manager = AppWidgetManager.getInstance(context)
             val ids = manager.getAppWidgetIds(
                 ComponentName(context, FavoriteWidgetProvider::class.java)
             )
-            updateWidgets(context, manager, ids)
+            updateWidgets(context, manager, ids, advance)
         }
 
         @Synchronized
-        private fun updateWidgets(context: Context, manager: AppWidgetManager, ids: IntArray) {
+        private fun updateWidgets(
+            context: Context, manager: AppWidgetManager, ids: IntArray, advance: Boolean = false
+        ) {
             if (ids.isEmpty()) return
             val store = FavoriteWidgetStore(context)
+            if (advance && !store.advance()) return
             val note = store.currentNote()
             val style = store.style
+            val displayedChild = store.displayedChild()
             ids.forEach { id ->
-                manager.updateAppWidget(id, buildRemoteViews(context, note, manager.getAppWidgetOptions(id), style))
+                val options = manager.getAppWidgetOptions(id)
+                manager.updateAppWidget(id, buildRemoteViews(context, note, options, style, displayedChild, advance))
             }
             scheduleDailyRefresh(context)
         }
@@ -96,7 +99,9 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
             context: Context,
             note: FavoriteWidgetNote?,
             options: Bundle,
-            style: FavoriteWidgetStyle
+            style: FavoriteWidgetStyle,
+            displayedChild: Int = 0,
+            animate: Boolean = false
         ): RemoteViews {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val sizes = BundleCompat.getParcelableArrayList(
@@ -113,7 +118,7 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
                             (size.width - HOST_INSETS_DP).coerceAtLeast(1f),
                             (size.height - HOST_INSETS_DP).coerceAtLeast(1f)
                         )
-                        minimum to cardViews(context, note, style, size, scale)
+                        minimum to cardViews(context, note, style, size, scale, displayedChild, animate)
                     })
                 }
             }
@@ -132,9 +137,9 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
                 widgetDimension(minHeight, maxHeight, defaultSize.height)
             )
             val scale = bitmapScale(context, listOf(portrait, landscape).distinct())
-            val portraitViews = cardViews(context, note, style, portrait, scale)
+            val portraitViews = cardViews(context, note, style, portrait, scale, displayedChild, animate)
             return if (landscape == portrait) portraitViews else RemoteViews(
-                cardViews(context, note, style, landscape, scale),
+                cardViews(context, note, style, landscape, scale, displayedChild, animate),
                 portraitViews
             )
         }
@@ -146,8 +151,8 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
             val metrics = context.resources.displayMetrics
             val density = metrics.density.toDouble()
             val pixels = sizes.sumOf { (it.width * density) * (it.height * density) }
-            // Android caps the combined bitmap memory of all layouts in an update.
-            val budget = metrics.widthPixels.toDouble() * metrics.heightPixels
+            // Budget for the sharp text, blurred text, and divider layers.
+            val budget = metrics.widthPixels.toDouble() * metrics.heightPixels * 4 / 6
             return sqrt(budget.coerceAtLeast(1.0) / pixels).coerceAtMost(1.0).toFloat()
         }
 
@@ -156,7 +161,9 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
             note: FavoriteWidgetNote?,
             style: FavoriteWidgetStyle,
             dimensions: SizeF,
-            bitmapScale: Float
+            bitmapScale: Float,
+            displayedChild: Int,
+            animate: Boolean
         ): RemoteViews {
             val density = context.resources.displayMetrics.density
             val size = FavoriteWidgetSize.forDimensions(dimensions.width, dimensions.height)
@@ -168,22 +175,44 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
                 (dimensions.width * density).roundToInt().coerceAtLeast(1),
                 (dimensions.height * density).roundToInt().coerceAtLeast(1),
                 bitmapScale,
-                // Keep the terminal border on the host when the launcher scales the bitmap.
-                drawBackground = style != FavoriteWidgetStyle.TERMINAL
+                forLauncher = true,
+                blurText = animate && note != null
             )
             // The launcher applies RemoteViews in a restricted context. Sending the
             // rendered card keeps its font independent of the launcher's typeface.
             val views = RemoteViews(context.packageName, R.layout.widget_favorite_host)
             views.setInt(R.id.widget_root, "setBackgroundResource", style.background)
-            views.setImageViewBitmap(R.id.widget_card, card.bitmap)
-            views.setContentDescription(R.id.widget_root, card.description)
+            views.setImageViewBitmap(R.id.widget_static_divider, card.divider)
+            views.setInt(R.id.widget_static_divider, "setColorFilter", context.getColor(style.dividerColor))
+            val (textView, blurView, focusView) = if (displayedChild == 0) {
+                Triple(R.id.widget_card, R.id.widget_card_blur, R.id.widget_card_focus)
+            } else {
+                Triple(R.id.widget_card_alternate, R.id.widget_card_alternate_blur, R.id.widget_card_alternate_focus)
+            }
+            views.setImageViewBitmap(textView, card.bitmap)
+            if (card.blurredText != null) {
+                views.setImageViewBitmap(blurView, card.blurredText)
+                val blurColor = if (style.isTerminal) style.dividerColor else R.color.widget_paper_foreground
+                views.setInt(blurView, "setColorFilter", context.getColor(blurColor))
+            }
+            // The nested flipper briefly draws the blurred bitmap while sharp text fades in.
+            views.setDisplayedChild(focusView, 0)
+            if (card.blurredText != null) {
+                views.setDisplayedChild(focusView, 1)
+                views.setDisplayedChild(focusView, 0)
+            }
+            views.setDisplayedChild(R.id.widget_text_flipper, displayedChild)
+            views.setContentDescription(R.id.widget_open_touch, card.description)
             views.setViewVisibility(
                 R.id.widget_next_touch,
                 if (note == null) View.GONE else View.VISIBLE
             )
-            views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context))
+            views.setOnClickPendingIntent(R.id.widget_open_touch, openAppIntent(context))
             if (note != null) {
                 views.setImageViewResource(R.id.widget_next_touch, style.nextIcon)
+                views.setInt(R.id.widget_next_touch, "setColorFilter", if (style.isTerminal) {
+                    context.getColor(style.dividerColor)
+                } else android.graphics.Color.TRANSPARENT)
                 val inset = (size.paddingDp * density).roundToInt()
                 val start = (NEXT_TOUCH_DP * density).roundToInt() - inset -
                     (size.nextSizeDp * density).roundToInt()

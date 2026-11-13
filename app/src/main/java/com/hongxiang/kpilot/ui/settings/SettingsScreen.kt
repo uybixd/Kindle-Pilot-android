@@ -1,9 +1,5 @@
 package com.hongxiang.kpilot.ui.settings
 
-import android.appwidget.AppWidgetManager
-import android.content.ComponentName
-import android.os.Build
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,11 +21,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -46,7 +44,6 @@ import com.hongxiang.kpilot.support.SupportKPilotEntry
 import com.hongxiang.kpilot.ui.LocalTabActive
 import com.hongxiang.kpilot.widget.FavoriteWidgetCard
 import com.hongxiang.kpilot.widget.FavoriteWidgetNote
-import com.hongxiang.kpilot.widget.FavoriteWidgetProvider
 import com.hongxiang.kpilot.widget.FavoriteWidgetSelection
 import com.hongxiang.kpilot.widget.FavoriteWidgetSize
 import com.hongxiang.kpilot.widget.FavoriteWidgetStore
@@ -165,12 +162,6 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenClipping: (Ki
                     onRestoreHidden = viewModel::restoreExcludedReviewClipping
                 )
                 Page.WIDGET -> {
-                    val manager = remember(context) { AppWidgetManager.getInstance(context) }
-                    val provider = remember(context) {
-                        ComponentName(context, FavoriteWidgetProvider::class.java)
-                    }
-                    val unsupported = localizedText("当前桌面不支持直接添加小组件")
-                    val confirm = localizedText("请在系统提示中确认添加")
                     var style by remember(context) { mutableStateOf(FavoriteWidgetStore(context).style) }
                     val preview = previewFavorite(state, isActive)
                     Group("小组件样式") {
@@ -205,22 +196,6 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenClipping: (Ki
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        }
-                    }
-                    Group {
-                        Action("添加到桌面", Icons.Filled.Add, true) {
-                            val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                                manager.isRequestPinAppWidgetSupported
-                            if (supported) {
-                                val requested = manager.requestPinAppWidget(provider, null, null)
-                                Toast.makeText(
-                                    context,
-                                    if (requested) confirm else unsupported,
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            } else {
-                                Toast.makeText(context, unsupported, Toast.LENGTH_SHORT).show()
-                            }
                         }
                     }
                 }
@@ -276,6 +251,7 @@ private fun FavoriteWidgetPreview(note: FavoriteWidgetNote?, style: FavoriteWidg
                 Image(
                     painter = painterResource(style.nextIcon),
                     contentDescription = null,
+                    colorFilter = if (style.isTerminal) ColorFilter.tint(colorResource(style.dividerColor)) else null,
                     modifier = Modifier.align(Alignment.BottomEnd)
                         .padding(size.paddingDp.dp)
                         .size(size.nextSizeDp.dp)

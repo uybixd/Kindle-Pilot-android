@@ -52,8 +52,8 @@ android {
         applicationId = "com.hongxiang.kpilot"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 9
+        versionName = "1.0.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -96,10 +96,6 @@ androidComponents {
     onVariants(selector().all()) { variant ->
         val buildTypeName = variant.buildType ?: variant.name
         variant.outputs.forEach { output ->
-            if (buildTypeName == "debug") {
-                output.versionCode.set(6)
-                output.versionName.set("1.0.5")
-            }
             output.outputFileName.set(
                 output.versionName.map { versionName ->
                     "KPilot-$versionName-$buildTypeName.apk"

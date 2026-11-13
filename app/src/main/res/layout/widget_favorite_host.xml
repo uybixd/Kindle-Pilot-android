@@ -6,18 +6,80 @@
     android:background="@drawable/widget_paper_background">
 
     <ImageView
-        android:id="@+id/widget_card"
+        android:id="@+id/widget_static_divider"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:importantForAccessibility="no"
         android:scaleType="fitCenter" />
 
-    <ImageButton
+    <ViewFlipper
+        android:id="@+id/widget_text_flipper"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:animateFirstView="false"
+        android:importantForAccessibility="noHideDescendants"
+        android:outAnimation="@anim/widget_text_fade_out">
+
+        <ViewFlipper
+            android:id="@+id/widget_card_focus"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:animateFirstView="false"
+            android:inAnimation="@anim/widget_text_fade_in"
+            android:outAnimation="@anim/widget_text_blur_out">
+
+            <ImageView
+                android:id="@+id/widget_card"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter" />
+
+            <ImageView
+                android:id="@+id/widget_card_blur"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter" />
+        </ViewFlipper>
+
+        <ViewFlipper
+            android:id="@+id/widget_card_alternate_focus"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:animateFirstView="false"
+            android:inAnimation="@anim/widget_text_fade_in"
+            android:outAnimation="@anim/widget_text_blur_out">
+
+            <ImageView
+                android:id="@+id/widget_card_alternate"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter" />
+
+            <ImageView
+                android:id="@+id/widget_card_alternate_blur"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter" />
+        </ViewFlipper>
+    </ViewFlipper>
+
+    <TextView
+        android:id="@+id/widget_open_touch"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="true"
+        android:focusable="true"
+        android:soundEffectsEnabled="false" />
+
+    <ImageView
         android:id="@+id/widget_next_touch"
         android:layout_width="56dp"
         android:layout_height="56dp"
         android:layout_gravity="bottom|end"
         android:background="@android:color/transparent"
+        android:clickable="true"
+        android:focusable="true"
+        android:soundEffectsEnabled="false"
         android:contentDescription="@string/widget_next_favorite"
         android:scaleType="fitCenter"
         android:src="@drawable/ic_widget_paper_next"

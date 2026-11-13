@@ -6,6 +6,7 @@ import com.hongxiang.kpilot.notes.ClippingKind
 import com.hongxiang.kpilot.notes.ClippingsValidation
 import com.hongxiang.kpilot.notes.KindleClipping
 import com.hongxiang.kpilot.notes.NoteDraft
+import com.hongxiang.kpilot.support.SyncTrace
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -19,6 +20,7 @@ data class WritebackResult(
 internal interface NoteWritebackConnection : AutoCloseable {
     fun exec(command: String): String
     fun download(path: String): ByteArray
+    fun downloadMany(paths: List<String>): List<ByteArray> = paths.map(::download)
     fun replace(path: String, original: ByteArray, updated: ByteArray, backup: String)
     fun restore(path: String, backup: String, written: ByteArray)
 }
@@ -98,7 +100,7 @@ class KindleNoteWritebackService internal constructor(
         require(issue == null) { "Kindle 的 My Clippings.txt 格式不完整，已停止写入" }
         val fresh = snapshot.items.firstOrNull { it.id == clipping.id }
             ?: error("Kindle 的 My Clippings.txt 中已找不到这条标注")
-        val candidates = readCandidates(connection, sidecarPaths(connection), listOf(fresh))
+        val candidates = readCandidates(connection, sidecarPaths(connection), listOf(fresh), verifyRoundTrip = true)
         return PreparedWrite(fresh, AnnotationMatcher.match(candidates, fresh))
     }
 
@@ -117,72 +119,69 @@ class KindleNoteWritebackService internal constructor(
         connection: NoteWritebackConnection,
         clippings: List<KindleClipping>
     ): CurrentAnnotations {
-        val paths = sidecarPaths(connection)
-        val candidates = readCandidates(connection, paths, clippings)
-        val notes = mutableMapOf<String, String>()
-        val removed = mutableSetOf<String>()
-        val checked = mutableSetOf<String>()
-        for (book in clippings.groupBy { it.bookId }.values) {
-            val path = paths.singleOrNull { AnnotationMatcher.fullTitleMatches(it, book.first()) }
-            val candidate = candidates.singleOrNull { it.path == path && !it.path.endsWith(".yjr", true) }
-            val nativeHighlights = candidate?.store?.annotations().orEmpty()
-                .filter { it.type == KindleReaderDataStore.HIGHLIGHT }
-            val exportsByTime = book.groupingBy { it.addedAt }.eachCount()
-            val missing = mutableListOf<KindleClipping>()
-            var confirmedBook = false
-            for (clipping in book) {
-                checkInterrupted()
-                if (candidate == null && clipping.kindleNotes.isEmpty()) continue
-                val match = try {
-                    if (candidate == null) AnnotationMatcher.matchOrNull(candidates, clipping)
-                    else {
-                        // Repeated exports can share the same position. Only the creation
-                        // timestamp can distinguish a deleted highlight from a re-created one.
-                        val timestamp = clipping.addedAt?.toEpochMilli()
-                        if (timestamp == null || exportsByTime[clipping.addedAt] != 1) continue
-                        val exact = nativeHighlights.filter {
-                            kotlin.math.abs(it.creationTime - timestamp) < 1000
+        val span = SyncTrace.begin("annotations-read")
+        var sidecarCount = 0
+        var candidateCount = 0
+        try {
+            val paths = span.stage("list_sidecars") { sidecarPaths(connection) }
+                .also { sidecarCount = it.size }
+            val candidates = span.stage("download_decode") {
+                readCandidates(connection, paths, clippings, verifyRoundTrip = false)
+            }.also { candidateCount = it.size }
+            val matcher = MatchIndex(candidates, paths)
+            val notes = mutableMapOf<String, String>()
+            val removed = mutableSetOf<String>()
+            val checked = mutableSetOf<String>()
+            for (book in clippings.groupBy { it.bookId }.values) {
+                val path = matcher.fullTitlePath(book.first())
+                val candidate = path?.let(matcher::candidate)?.takeIf { !it.path.endsWith(".yjr", true) }
+                val nativeHighlights = candidate?.highlights.orEmpty()
+                val exportsByTime = book.groupingBy { it.addedAt }.eachCount()
+                val missing = mutableListOf<KindleClipping>()
+                var confirmedBook = false
+                for (clipping in book) {
+                    checkInterrupted()
+                    if (candidate == null && clipping.kindleNotes.isEmpty()) continue
+                    val match = try {
+                        if (candidate == null) matcher.matchOrNull(clipping)
+                        else {
+                            // Repeated exports can share the same position. Only the creation
+                            // timestamp can distinguish a deleted highlight from a re-created one.
+                            val timestamp = clipping.addedAt?.toEpochMilli()
+                            if (timestamp == null || exportsByTime[clipping.addedAt] != 1) continue
+                            val exact = nativeHighlights.filter {
+                                kotlin.math.abs(it.creationTime - timestamp) < 1000
+                            }
+                            require(exact.size <= 1)
+                            exact.singleOrNull()?.let { AnnotationMatch(candidate, it) }
                         }
-                        require(exact.size <= 1)
-                        exact.singleOrNull()?.let { AnnotationMatch(candidate, it) }
+                    } catch (_: IllegalArgumentException) {
+                        continue
                     }
-                } catch (_: IllegalArgumentException) {
-                    continue
+                    if (match != null) {
+                        confirmedBook = confirmedBook || candidate != null
+                        checked += clipping.id
+                        runCatching { currentNotes(match).singleOrNull()?.note?.let(::normalizedNoteText).orEmpty() }
+                            .onSuccess { notes[clipping.id] = it }
+                    } else {
+                        if (clipping.addedAt != null && clipping.locationStart != null &&
+                            Regex("""\d{1,2}[:：]\d{2}[:：]\d{2}""").containsMatchIn(clipping.metadata)
+                        ) missing += clipping
+                        if (matcher.exportedNotesAreGone(clipping)) notes[clipping.id] = ""
+                    }
                 }
-                if (match != null) {
-                    confirmedBook = confirmedBook || candidate != null
-                    checked += clipping.id
-                    runCatching { currentNotes(match).singleOrNull()?.note?.let(::normalizedNoteText).orEmpty() }
-                        .onSuccess { notes[clipping.id] = it }
-                } else {
-                    if (clipping.addedAt != null && clipping.locationStart != null &&
-                        Regex("""\d{1,2}[:：]\d{2}[:：]\d{2}""").containsMatchIn(clipping.metadata)
-                    ) missing += clipping
-                    if (exportedNotesAreGone(clipping, paths, candidates)) notes[clipping.id] = ""
-                }
-            }
-            if (confirmedBook) {
-                missing.forEach {
-                    checked += it.id
-                    removed += it.id
+                if (confirmedBook) {
+                    missing.forEach {
+                        checked += it.id
+                        removed += it.id
+                    }
                 }
             }
+            span.mark("match")
+            return CurrentAnnotations(notes, removed, checked)
+        } finally {
+            span.end("sidecars=$sidecarCount candidates=$candidateCount clips=${clippings.size}")
         }
-        return CurrentAnnotations(notes, removed, checked)
-    }
-
-    private fun exportedNotesAreGone(
-        clipping: KindleClipping,
-        paths: List<String>,
-        candidates: List<SidecarCandidate>
-    ): Boolean {
-        if (clipping.kindleNotes.isEmpty()) return false
-        val path = paths.singleOrNull { AnnotationMatcher.fullTitleMatches(it, clipping) } ?: return false
-        if (path.endsWith(".yjr", true)) return false
-        val annotations = candidates.singleOrNull { it.path == path }?.store?.annotations() ?: return false
-        if (annotations.isEmpty()) return false
-        val liveTexts = annotations.mapNotNull { it.note?.let(::normalizedNoteText) }.toSet()
-        return clipping.kindleNotes.none { normalizedNoteText(it.text) in liveTexts }
     }
 
     private fun sidecarPaths(connection: NoteWritebackConnection): List<String> =
@@ -194,23 +193,39 @@ class KindleNoteWritebackService internal constructor(
     private fun readCandidates(
         connection: NoteWritebackConnection,
         paths: List<String>,
-        clippings: List<KindleClipping>
+        clippings: List<KindleClipping>,
+        verifyRoundTrip: Boolean
     ): List<SidecarCandidate> {
         require(paths.isNotEmpty()) { "Kindle 中没有找到 AZW3、MOBI 或 KFX 批注文件" }
-        return paths.mapNotNull { path ->
+        val clippingKeys = clippings.map(::ClippingKey)
+        // KFX records carry no usable reading offsets, so reject unrelated files by title.
+        // AZW3/MOBI must still be decoded: their sidecar name can differ from the
+        // My Clippings title while the location and creation time still identify it.
+        val downloadPaths = paths.filter { path ->
             checkInterrupted()
-            // KFX records carry no usable reading offsets, so reject unrelated files by title.
-            // AZW3/MOBI must still be decoded: their sidecar name can differ from the
-            // My Clippings title while the location and creation time still identify it.
-            if (path.endsWith(".yjr", true) && clippings.none { AnnotationMatcher.titleSimilarity(path, it) >= 0.12 }) {
-                return@mapNotNull null
-            }
+            val key = SidecarKey(path)
+            !key.isKfx || clippingKeys.any { key.titleSimilarity(it) >= 0.12 }
+        }
+        // One SSH exec for all sidecars instead of one round trip per file. Fall back to
+        // individual reads if the batch response is rejected, so one unreadable file
+        // cannot fail the whole annotation refresh.
+        val batched = downloadPaths.takeIf { it.isNotEmpty() }?.let { requested ->
+            runCatching { connection.downloadMany(requested) }
+                .getOrNull()
+                ?.takeIf { it.size == requested.size }
+        }
+        return downloadPaths.mapIndexedNotNull { index, path ->
+            checkInterrupted()
+            val bytes = batched?.get(index)
+                ?: runCatching { connection.download(path) }.getOrNull()
+                ?: return@mapIndexedNotNull null
             runCatching {
-                val bytes = connection.download(path)
                 val store = KindleReaderDataStore.decode(bytes)
-                require(store.encoded().contentEquals(bytes)) { "Kindle sidecar 无法无损重编码" }
-                store.annotations()
-                SidecarCandidate(path, bytes, store)
+                val annotations = store.annotations()
+                if (verifyRoundTrip) {
+                    require(store.encoded().contentEquals(bytes)) { "Kindle sidecar 无法无损重编码" }
+                }
+                SidecarCandidate(path, bytes, store, annotations)
             }.getOrElse { error ->
                 if (error is InterruptedException) throw error
                 null // Unsupported sidecars are never modified.
@@ -219,8 +234,8 @@ class KindleNoteWritebackService internal constructor(
     }
 
     private fun currentNotes(match: AnnotationMatch): List<SidecarAnnotation> {
-        val annotations = match.candidate.store.annotations()
-        val highlights = annotations.filter { it.type == KindleReaderDataStore.HIGHLIGHT }
+        val annotations = match.candidate.annotations
+        val highlights = match.candidate.highlights
         val target = match.highlight
         val notes = annotations.filter { it.type == KindleReaderDataStore.NOTE }.filter { note ->
             val exact = highlights.filter { highlight ->

@@ -3,21 +3,25 @@ package com.hongxiang.kpilot.vocabulary
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
+import android.util.Log
 import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.data.cacheScope
 import com.hongxiang.kpilot.notes.AtomicCache
 import com.hongxiang.kpilot.notes.AtomicCacheException
 import com.hongxiang.kpilot.notes.AtomicCacheStage
 import com.hongxiang.kpilot.ssh.KindleSshSessionFactory
+import com.hongxiang.kpilot.support.SyncTrace
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.Session
 import java.io.FilterOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.OutputStream
 import java.time.Instant
 
 class VocabularySyncService(context: Context) {
     private val directory = context.noBackupFilesDir.resolve("vocabulary")
+    private val assets = context.assets
     private fun cacheFile(settings: ConnectionSettings) = directory.resolve("${settings.cacheScope()}/vocab.db")
     fun migrateLegacyCache(settings: ConnectionSettings) {
         if (settings.host.isBlank()) return
@@ -27,44 +31,68 @@ class VocabularySyncService(context: Context) {
         }
     }
 
-    fun sync(settings: ConnectionSettings, onProgress: (Long, Long?) -> Unit): VocabularySnapshot = try {
-        withSession(settings) { session ->
-            val cacheFile = cacheFile(settings)
-            var validatedLookups: List<VocabularyLookup>? = null
-            AtomicCache.writeValidated(
-                destination = cacheFile,
-                writer = { output ->
-                    execute(session, "cat ${quote(REMOTE_PATH)}", CountingOutputStream(output) { onProgress(it, null) })
-                },
-                validate = { temporary -> validatedLookups = VocabularyDatabase.read(temporary) }
-            )
-            VocabularySnapshot(validatedLookups.orEmpty(), Instant.now(), cacheFile.length())
+    fun sync(settings: ConnectionSettings, onProgress: (Long, Long?) -> Unit): VocabularySnapshot {
+        val span = SyncTrace.begin("vocabulary")
+        var bytes = 0L
+        var lookups = -1
+        try {
+            val rows = withSession(settings, span) { session ->
+                val cacheFile = cacheFile(settings)
+                var validatedLookups: List<VocabularyLookup>? = null
+                AtomicCache.writeValidated(
+                    destination = cacheFile,
+                    writer = { output ->
+                        span.stage("download") {
+                            execute(session, "cat ${quote(REMOTE_PATH)}", CountingOutputStream(output) { onProgress(it, null) })
+                        }
+                    },
+                    validate = { temporary ->
+                        span.stage("validate") { validatedLookups = VocabularyDatabase.read(temporary) }
+                    }
+                )
+                bytes = cacheFile.length()
+                validatedLookups.orEmpty()
+            }
+            lookups = rows.size
+            return span.stage("dictionary") { makeSnapshot(rows, Instant.now(), bytes) }
+        } catch (error: AtomicCacheException) {
+            throw VocabularySyncException(VocabularyDiagnostics.cache(error.stage), error)
+        } catch (error: VocabularySyncException) {
+            throw error
+        } catch (error: Exception) {
+            throw VocabularySyncException(VocabularyDiagnostics.unknown(), error)
+        } finally {
+            span.end("bytes=$bytes lookups=$lookups")
         }
-    } catch (error: AtomicCacheException) {
-        throw VocabularySyncException(VocabularyDiagnostics.cache(error.stage), error)
-    } catch (error: VocabularySyncException) {
-        throw error
-    } catch (error: Exception) {
-        throw VocabularySyncException(VocabularyDiagnostics.unknown(), error)
     }
 
     fun loadCached(settings: ConnectionSettings): VocabularySnapshot? {
         val file = cacheFile(settings)
-        return if (file.isFile) VocabularySnapshot(VocabularyDatabase.read(file), Instant.ofEpochMilli(file.lastModified()), file.length()) else null
+        return if (file.isFile) makeSnapshot(VocabularyDatabase.read(file), Instant.ofEpochMilli(file.lastModified()), file.length()) else null
     }
 
     fun importBytes(settings: ConnectionSettings, bytes: ByteArray): VocabularySnapshot {
         val file = cacheFile(settings)
         var lookups: List<VocabularyLookup> = emptyList()
         AtomicCache.writeValidated(file, { it.write(bytes) }, { lookups = VocabularyDatabase.read(it) })
-        return VocabularySnapshot(lookups, Instant.now(), file.length())
+        return makeSnapshot(lookups, Instant.now(), file.length())
     }
 
-    private fun <T> withSession(settings: ConnectionSettings, block: (Session) -> T): T {
+    private fun makeSnapshot(lookups: List<VocabularyLookup>, syncedAt: Instant, bytes: Long): VocabularySnapshot {
+        val entries = try {
+            VocabularyDictionary.match(lookups) { assets.open(VocabularyDictionary.ASSET) }
+        } catch (error: IOException) {
+            Log.w("KPilotVocabulary", "Cannot load the bundled Wiktionary dictionary", error)
+            emptyMap()
+        }
+        return VocabularySnapshot(lookups, syncedAt, bytes, entries)
+    }
+
+    private fun <T> withSession(settings: ConnectionSettings, span: SyncTrace, block: (Session) -> T): T {
         settings.validate()
         val session = KindleSshSessionFactory.create(settings)
         return try {
-            session.connect(CONNECT_TIMEOUT_MS)
+            span.stage("connect") { session.connect(CONNECT_TIMEOUT_MS) }
             block(session)
         } finally { session.disconnect() }
     }

@@ -104,19 +104,12 @@ internal fun VocabularyScreen(
         if (searchVisible) Box(Modifier.padding(horizontal = readingListInset, vertical = 8.dp)) {
             InlineSearchField(
                 state.vocabularyQuery, viewModel::updateVocabularyQuery,
-                "搜索单词、书名或上下文", onCloseSearch, searchFocusRequested, onSearchFocused
+                "搜索单词、释义、书名或上下文", onCloseSearch, searchFocusRequested, onSearchFocused
             )
         }
-        if (state.vocabularyError) Text(
-            state.vocabularyMessage,
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
-        )
-        if (state.learningMessage.isNotBlank()) Text(
+        if (!state.learningError && state.learningMessage.isNotBlank()) Text(
             state.learningMessage,
-            color = if (state.learningError) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
         )
@@ -168,7 +161,7 @@ internal fun VocabularyScreen(
                     ""
                 )
             }
-            if (state.vocabularyQuery.isBlank() && state.vocabularyWords.isNotEmpty()) {
+            if (state.learningLoaded && state.vocabularyQuery.isBlank() && state.vocabularyWords.isNotEmpty()) {
                 item(key = "review-entry") {
                     val queue = viewModel.vocabularyReviewQueue()
                     VocabularyReviewEntry(
@@ -307,10 +300,11 @@ internal fun VocabularyDetail(
                                 runCatching { context.startActivity(dictionaryIntent) }
                             }) { Text("系统词典") }
                         }
+                        word.dictionaryEntry?.let { VocabularyDictionaryContent(it, lookupWord) }
                         OutlinedTextField(
                             value = draft,
                             onValueChange = { draft = it },
-                            placeholder = { Text("还没有释义，可以在这里补充") },
+                            label = { Text("自定义释义") },
                             modifier = Modifier.fillMaxWidth(),
                             minLines = 3,
                             maxLines = 6

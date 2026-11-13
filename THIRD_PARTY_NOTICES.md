@@ -58,6 +58,35 @@ License, Version 1.1. The full license text is stored in
 distributed with KPilot as part of the application and are not relicensed
 under KPilot's GNU General Public License.
 
+## Zhuque Fangsong
+
+The home screen widget bundles the unmodified Zhuque Fangsong Regular font
+from [TrionesType's v0.212 release](https://github.com/TrionesType/zhuque/releases/tag/v0.212).
+The font is distributed under the SIL Open Font License 1.1. See
+[`licenses/ZhuqueFangsong-OFL.txt`](licenses/ZhuqueFangsong-OFL.txt).
+
+## Wiktionary vocabulary data
+
+`app/src/main/assets/dictionary/wiktionary-en.zip` contains IPA pronunciations, parts of speech
+and selected English glosses adapted from Wiktionary contributors. The app links each entry
+to its source page, where the contributor history is available. [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
+
+Both extracts use Tatu Ylönen's Wiktextract. [Wiktextract](https://github.com/tatuylonen/wiktextract)
+
+- English Wiktionary common-word extract, packaged by WM Keyboard. [Pinned source file](https://github.com/wasi-master/wmkeyboard-data/blob/53d1df8c47f96525ffc1cee05fd6260e4b3b5df1/dictionary/en/wiktionary.wmdict.gz)
+- Simple English Wiktionary extract from the 2026-10-02 dump. [Kaikki.org downloads](https://kaikki.org/simplewiktionary/rawdata.html)
+
+```text
+wiktionary.wmdict.gz SHA-256 6acd41a3056c1b85bc3d99e3bf312ea5874fbb8d793a7b081992e1681173e6ac
+raw-wiktextract-data.jsonl.gz SHA-256 ddcd73f43d23daff9c38510e8f7a63c5a7262dc962f7cce85f105da4c418e79f
+```
+
+Rebuild the asset with the two compressed inputs.
+
+```sh
+python3 scripts/build-vocabulary-dictionary.py wiktionary.wmdict.gz raw-wiktextract-data.jsonl.gz app/src/main/assets/dictionary/wiktionary-en.zip
+```
+
 ## Support assets
 
 Personal support/payment QR-code images are not stored in this repository.

@@ -5,6 +5,7 @@ import java.io.IOException
 import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.data.cacheScope
 import com.hongxiang.kpilot.ssh.KindleSshSessionFactory
+import com.hongxiang.kpilot.support.SyncTrace
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
@@ -30,41 +31,70 @@ class ClippingsSyncService(context: Context) {
     fun sync(
         settings: ConnectionSettings,
         onProgress: (downloaded: Long, total: Long?) -> Unit
-    ): ClippingsSnapshot = try {
-        withSession(settings) { session ->
-            val cacheFile = cacheFile(settings)
-            // Deliberately mirrors the proven Mac protocol: one quoted cat stream.
-            // Do not require wc/stat: Kindle BusyBox variants are not consistent.
-            try {
-                AtomicCache.writeValidated(
-                    destination = cacheFile,
-                    writer = { output ->
-                        download(session, shellQuote(REMOTE_PATH), CountingOutputStream(output) { bytes ->
-                            onProgress(bytes, null)
-                        })
-                    },
-                    validate = { temporary ->
-                        val (_, issue) = ClippingsValidation.inspect(temporary.readBytes())
-                        if (issue != null) throw ClippingsFormatException(issue)
-                    }
-                )
-            } catch (error: NotesSyncException) {
-                throw error
-            } catch (error: AtomicCacheException) {
-                val format = error.cause as? ClippingsFormatException
-                throw NotesSyncException(
-                    format?.let { NotesDiagnostics.format(it.issue) } ?: NotesDiagnostics.cache(error.stage),
-                    error
-                )
+    ): ClippingsSnapshot {
+        val span = SyncTrace.begin("notes")
+        var bytes = 0L
+        var items = -1
+        var parsed: ClippingsParseResult? = null
+        try {
+            return withSession(settings, span) { session ->
+                val cacheFile = cacheFile(settings)
+                // Deliberately mirrors the proven Mac protocol: one quoted cat stream.
+                // Do not require wc/stat: Kindle BusyBox variants are not consistent.
+                try {
+                    AtomicCache.writeValidated(
+                        destination = cacheFile,
+                        writer = { output ->
+                            span.stage("download") {
+                                download(session, shellQuote(REMOTE_PATH), CountingOutputStream(output) { current ->
+                                    onProgress(current, null)
+                                })
+                            }
+                        },
+                        validate = { temporary ->
+                            span.stage("validate") {
+                                val result = ClippingsParser.parseDetailed(
+                                    ClippingsTextDecoder.decode(temporary.readBytes()),
+                                    includeSourceHighlights = true
+                                )
+                                ClippingsValidation.issue(result)?.let { throw ClippingsFormatException(it) }
+                                parsed = result
+                            }
+                        }
+                    )
+                } catch (error: NotesSyncException) {
+                    throw error
+                } catch (error: AtomicCacheException) {
+                    val format = error.cause as? ClippingsFormatException
+                    throw NotesSyncException(
+                        format?.let { NotesDiagnostics.format(it.issue) } ?: NotesDiagnostics.cache(error.stage),
+                        error
+                    )
+                }
+                bytes = cacheFile.length()
+                span.stage("parse") {
+                    // Reuse the parse performed during validation instead of reading and
+                    // decoding the same file a second time.
+                    val result = checkNotNull(parsed) { "Clippings validation result missing" }
+                    ClippingsSnapshot(
+                        items = result.items,
+                        syncedAt = Instant.now(),
+                        sourceBytes = bytes,
+                        filteredDuplicateCount = result.filteredDuplicateCount,
+                        filteredSingleSelectionCount = result.filteredSingleSelectionCount,
+                        sourceHighlights = result.sourceHighlights
+                    )
+                }.also { items = it.items.size }
             }
-            parseCache(cacheFile, Instant.now(), includeSourceHighlights = true)
+        } catch (error: NotesSyncException) {
+            throw error
+        } catch (error: AtomicCacheException) {
+            throw NotesSyncException(NotesDiagnostics.cache(error.stage), error)
+        } catch (error: Exception) {
+            throw NotesSyncException(NotesDiagnostics.unknown(), error)
+        } finally {
+            span.end("bytes=$bytes items=$items")
         }
-    } catch (error: NotesSyncException) {
-        throw error
-    } catch (error: AtomicCacheException) {
-        throw NotesSyncException(NotesDiagnostics.cache(error.stage), error)
-    } catch (error: Exception) {
-        throw NotesSyncException(NotesDiagnostics.unknown(), error)
     }
 
     fun loadCached(settings: ConnectionSettings): ClippingsSnapshot? {
@@ -127,12 +157,12 @@ class ClippingsSyncService(context: Context) {
         )
     }
 
-    private fun <T> withSession(settings: ConnectionSettings, block: (Session) -> T): T {
+    private fun <T> withSession(settings: ConnectionSettings, span: SyncTrace, block: (Session) -> T): T {
         settings.validate()
         val session = KindleSshSessionFactory.create(settings)
         return try {
             try {
-                session.connect(CONNECT_TIMEOUT_MS)
+                span.stage("connect") { session.connect(CONNECT_TIMEOUT_MS) }
             } catch (error: JSchException) {
                 throw NotesSyncException(NotesDiagnostics.connect(error.message), error)
             }

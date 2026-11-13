@@ -2,6 +2,7 @@ package com.hongxiang.kpilot.review
 
 import com.hongxiang.kpilot.data.ConnectionSettings
 import com.hongxiang.kpilot.ssh.KindleSshSessionFactory
+import com.hongxiang.kpilot.support.SyncTrace
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.Session
 import java.io.ByteArrayInputStream
@@ -17,38 +18,51 @@ import java.util.UUID
  */
 class LearningSyncService {
     fun sync(settings: ConnectionSettings, local: LearningState): LearningState {
-        settings.validate()
-        val session = KindleSshSessionFactory.create(settings)
-        session.setServerAliveInterval(SERVER_ALIVE_INTERVAL_MS)
-        session.setServerAliveCountMax(SERVER_ALIVE_COUNT_MAX)
+        val span = SyncTrace.begin("learning")
+        var remoteBytes = -1
+        var mergedState: LearningState? = null
         try {
-            session.connect(CONNECT_TIMEOUT_MS)
-            acquireLock(session)
+            settings.validate()
+            val session = KindleSshSessionFactory.create(settings)
+            session.setServerAliveInterval(SERVER_ALIVE_INTERVAL_MS)
+            session.setServerAliveCountMax(SERVER_ALIVE_COUNT_MAX)
             try {
-                val remoteBytes = execute(session, readCommand(), MAX_STATE_BYTES, READ_TIMEOUT_MS)
-                val remoteText = remoteBytes.toString(Charsets.UTF_8).trim()
-                val remote = if (remoteText.isEmpty()) LearningState() else runCatching {
-                    LearningCodec.decode(remoteText)
-                }.getOrElse { error ->
-                    if (error is UnsupportedLearningSchemaException) {
-                        throw IllegalStateException("Kindle 回顾数据文件版本过新，请先更新应用，未写入", error)
+                span.stage("connect") { session.connect(CONNECT_TIMEOUT_MS) }
+                span.stage("lock") { acquireLock(session) }
+                try {
+                    val remote = span.stage("read") {
+                        execute(session, readCommand(), MAX_STATE_BYTES, READ_TIMEOUT_MS)
+                    }.also { remoteBytes = it.size }
+                    val encoded = span.stage("merge_encode") {
+                        val remoteText = remote.toString(Charsets.UTF_8).trim()
+                        val remoteState = if (remoteText.isEmpty()) LearningState() else runCatching {
+                            LearningCodec.decode(remoteText)
+                        }.getOrElse { error ->
+                            if (error is UnsupportedLearningSchemaException) {
+                                throw IllegalStateException("Kindle 回顾数据文件版本过新，请先更新应用，未写入", error)
+                            }
+                            throw IllegalStateException("Kindle 回顾数据文件格式无效，未写入", error)
+                        }
+                        val merged = LearningMerge.merge(local, remoteState)
+                        mergedState = merged
+                        val shared = merged.copy(clippingDailyCounts = emptyMap())
+                        LearningCodec.encode(shared, includeDailyCounts = false).toByteArray(Charsets.UTF_8)
                     }
-                    throw IllegalStateException("Kindle 回顾数据文件格式无效，未写入", error)
+                    check(encoded.size <= MAX_STATE_BYTES) { "Kindle 回顾数据过大，无法写入" }
+                    span.stage("upload") { uploadAtomic(session, encoded) }
+                    span.stage("verify") {
+                        val verified = execute(session, readCommand(), MAX_STATE_BYTES, READ_TIMEOUT_MS)
+                        check(verified.contentEquals(encoded)) { "回顾数据写入校验失败，请稍后重试" }
+                    }
+                    return checkNotNull(mergedState)
+                } finally {
+                    runCatching { execute(session, releaseLockCommand(), 1024, LOCK_RELEASE_TIMEOUT_MS) }
                 }
-                val merged = LearningMerge.merge(local, remote)
-                val shared = merged.copy(clippingDailyCounts = emptyMap())
-                val encoded = LearningCodec.encode(shared, includeDailyCounts = false)
-                    .toByteArray(Charsets.UTF_8)
-                check(encoded.size <= MAX_STATE_BYTES) { "Kindle 回顾数据过大，无法写入" }
-                uploadAtomic(session, encoded)
-                val verified = execute(session, readCommand(), MAX_STATE_BYTES, READ_TIMEOUT_MS)
-                check(verified.contentEquals(encoded)) { "回顾数据写入校验失败，请稍后重试" }
-                return merged
             } finally {
-                runCatching { execute(session, releaseLockCommand(), 1024, LOCK_RELEASE_TIMEOUT_MS) }
+                session.disconnect()
             }
         } finally {
-            session.disconnect()
+            span.end("remoteBytes=$remoteBytes")
         }
     }
 

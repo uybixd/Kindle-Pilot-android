@@ -7,5 +7,6 @@
     <color name="widget_paper_divider">#DDDCD4</color>
     <color name="widget_paper_next_background">#E2ECE7</color>
     <color name="widget_terminal_background">#000000</color>
-    <color name="widget_terminal_foreground">#009900</color>
+    <color name="widget_terminal_foreground">#00E676</color>
+    <color name="widget_terminal_amber_foreground">#FFB300</color>
 </resources>

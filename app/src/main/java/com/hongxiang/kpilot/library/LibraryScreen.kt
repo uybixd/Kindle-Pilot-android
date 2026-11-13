@@ -76,7 +76,7 @@ fun LibraryScreen(
     coverLoader: BookCoverLoader, syncing: Boolean,
     repairingPath: String?, repairMessage: String?, repairError: Boolean, coverRevision: Int,
     deletingPath: String?, deleteMessage: String?, deleteError: Boolean,
-    errorMessage: String?, onRefresh: () -> Unit, onRefreshClippings: () -> Unit,
+    onRefresh: () -> Unit, onRefreshClippings: () -> Unit,
     onOpenClipping: (KindleClipping) -> Unit,
     onRepairCover: (KindleBook) -> Unit, onDismissRepairMessage: () -> Unit,
     onDeleteBook: (KindleBook, Boolean) -> Unit, onDismissDeleteMessage: () -> Unit,
@@ -102,14 +102,6 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             Column(Modifier.fillMaxSize()) {
-                errorMessage?.let {
-                    Text(
-                        it,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
                 if (selected != null) {
                     val notes = clippingsByPath[selected.remotePath]
                     if (notes == null) {

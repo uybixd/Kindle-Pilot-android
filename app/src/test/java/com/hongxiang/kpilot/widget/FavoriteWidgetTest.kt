@@ -17,6 +17,7 @@ class FavoriteWidgetTest {
         assertEquals(FavoriteWidgetStyle.PAPER, FavoriteWidgetStyle.fromKey(null))
         assertEquals(FavoriteWidgetStyle.PAPER, FavoriteWidgetStyle.fromKey("unknown"))
         assertEquals(FavoriteWidgetStyle.TERMINAL, FavoriteWidgetStyle.fromKey("terminal"))
+        assertEquals(FavoriteWidgetStyle.TERMINAL_AMBER, FavoriteWidgetStyle.fromKey("terminal_amber"))
     }
 
     @Test

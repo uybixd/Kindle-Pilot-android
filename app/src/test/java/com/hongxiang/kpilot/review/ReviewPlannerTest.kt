@@ -123,8 +123,8 @@ class ReviewPlannerTest {
         assertEquals(2.65, result.easeFactor, 0.0001)
     }
 
-    @Test fun queueOrdersLearningThenDueReviewsThenNewAndExcludesSkipped() {
-        val keys = listOf("new", "learning-due", "learning-wait", "review-due", "review-wait", "skipped")
+    @Test fun queueDrawsReadyLearningThenDueReviewsThenNewAndExcludesSkipped() {
+        val keys = listOf("new", "learning-due", "learning-wait", "review-due", "review-wait", "skipped", "new")
         val records = mapOf(
             "learning-due" to VocabularyReviewRecord(
                 "learning-due", state = VocabularyReviewState.LEARNING, dueAt = now - 1_000
@@ -144,11 +144,36 @@ class ReviewPlannerTest {
         val queue = VocabularyReviewPlanner.makeQueue(
             keys, records, excluding = setOf("skipped"), now = now, zone = utc
         )
-        assertEquals(listOf("learning-due", "review-due", "new"), queue.wordKeys)
+        assertEquals("learning-due", queue.draw())
         assertEquals(1, queue.newCount)
         assertEquals(2, queue.learningCount)
         assertEquals(1, queue.reviewCount)
         assertEquals(now + 60_000, queue.nextLearningDueAt)
+
+        val excluded = setOf("skipped", "learning-due")
+        assertEquals("review-due", VocabularyReviewPlanner.makeQueue(keys, records, excluded, now, utc).draw())
+        assertEquals("new", VocabularyReviewPlanner.makeQueue(keys, records, excluded + "review-due", now, utc).draw())
+        assertNull(VocabularyReviewPlanner.makeQueue(keys, records, excluded + setOf("review-due", "new"), now, utc).draw())
+    }
+
+    @Test fun drawsRandomlyAmongDueReviewsAndAmongNewWords() {
+        val dueKeys = setOf("due-today", "overdue", "due-tonight")
+        val newKeys = setOf("apple", "banana", "cherry")
+        val keys = (dueKeys + newKeys + "tomorrow").sorted()
+        val records = mapOf(
+            "due-today" to now,
+            "overdue" to now - 86_400_000,
+            "due-tonight" to now + 12 * 3_600_000,
+            "tomorrow" to now + 24 * 3_600_000
+        ).mapValues { (key, due) ->
+            VocabularyReviewRecord(key, state = VocabularyReviewState.REVIEW, dueAt = due)
+        }
+        val dueQueue = VocabularyReviewPlanner.makeQueue(keys, records, now = now, zone = utc)
+        val newQueue = VocabularyReviewPlanner.makeQueue(keys, records, dueKeys, now, utc)
+        val random = Random(7)
+
+        assertEquals(dueKeys, List(40) { dueQueue.draw(random) }.toSet())
+        assertEquals(newKeys, List(40) { newQueue.draw(random) }.toSet())
     }
 
     @Test fun reviewIsDueAcrossTheWholeLocalDay() {
@@ -175,9 +200,13 @@ class ReviewPlannerTest {
             now = now,
             zone = utc
         )
-        assertEquals(listOf("abortion"), queue.wordKeys)
+        assertEquals("abortion", queue.draw())
         assertEquals(1, queue.learningCount)
         assertEquals(now + 600_000, queue.nextLearningDueAt)
+        val later = VocabularyReviewPlanner.makeQueue(
+            listOf("abolish", "abortion"), mapOf("abolish" to learning), now = now + 600_000, zone = utc
+        )
+        assertEquals("abolish", later.draw())
     }
 
     private fun clipping(id: String, book: String, kind: ClippingKind, text: String) = KindleClipping(

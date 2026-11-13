@@ -47,13 +47,19 @@ class FavoriteWidgetStore(context: Context) {
     @Synchronized
     fun noteCount(): Int = load().size
 
+    internal fun displayedChild(): Int = if (preferences.getBoolean(KEY_ALTERNATE_CHILD, false)) 1 else 0
+
     /** @return true when there is more than one favorite to rotate through. */
     @Synchronized
     fun advance(): Boolean {
         val count = noteCount()
         if (count <= 1) return false
         val next = Math.floorMod(offset() + 1, count.toLong())
-        preferences.edit { putLong(KEY_OFFSET, next) }
+        val showAlternate = displayedChild() == 0
+        preferences.edit {
+            putLong(KEY_OFFSET, next)
+            putBoolean(KEY_ALTERNATE_CHILD, showAlternate)
+        }
         return true
     }
 
@@ -65,6 +71,7 @@ class FavoriteWidgetStore(context: Context) {
         const val FILE_NAME = "favorite-widget.json"
         const val PREFERENCES_NAME = "favorite_widget"
         const val KEY_OFFSET = "offset"
+        const val KEY_ALTERNATE_CHILD = "alternate_child"
         const val KEY_STYLE = "style"
     }
 }

@@ -22,7 +22,8 @@ data class VocabularyLookup(
 data class VocabularyWord(
     val key: String,
     val displayWord: String,
-    val lookups: List<VocabularyLookup>
+    val lookups: List<VocabularyLookup>,
+    val dictionaryEntry: VocabularyDictionaryEntry? = null
 )
 
 enum class VocabularySortOrder { ALPHABETICAL, LOOKUP_COUNT }
@@ -40,10 +41,11 @@ object VocabularyOrdering {
 data class VocabularySnapshot(
     val lookups: List<VocabularyLookup>,
     val syncedAt: Instant,
-    val sourceBytes: Long
+    val sourceBytes: Long,
+    private val dictionaryEntries: Map<String, VocabularyDictionaryEntry> = emptyMap()
 ) {
     val words: List<VocabularyWord> get() = lookups.groupBy(VocabularyLookup::wordKey)
-        .map { (key, records) -> VocabularyWord(key, records.first().displayWord, records) }
+        .map { (key, records) -> VocabularyWord(key, records.first().displayWord, records, dictionaryEntries[key]) }
         .sortedBy { it.displayWord.lowercase() }
 }
 
