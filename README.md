@@ -8,25 +8,25 @@ KPilot is an Android companion app for jailbroken Kindle devices. It connects to
 - Downloading and browsing `My Clippings.txt`
 - A cached Kindle library with covers, reading progress, search, and per-book clippings
 - Random review of past clippings with favorites, hiding, and a daily review count
-- Vocabulary review with iOS-matched learning steps and SM-2-style intervals, plus local definitions
-- A terminal-style daily favorite home screen widget using the Terminus console font
+- Vocabulary review with SM-2-style intervals, plus local definitions
+- A home screen widget for displaying favorite notes
 - Offline note editing and writeback to existing AZW3, MOBI, and KFX highlights
 - Downloading and browsing Kindle vocabulary
-- Remote page turning from the phone, hardware keys, or a Xiaomi wearable
+- Remote page turning from the phone, hardware keys, a Bluetooth keyboard, or a Xiaomi band
 - Local encrypted storage for Kindle SSH connection settings
-- Icon-only navigation with optional Vocabulary and Remote tabs
+- Vocabulary and Remote tabs can be hidden
 
-The Kindle must have UsbNet or UsbNetLite installed, with SSH enabled, and must be reachable from the Android device.
+The Kindle must have UsbNetLite or KOReader (with built-in SSH) installed, with SSH enabled, and must be reachable from the Android device.
 
 ## Using the new features
 
 Pull down to refresh Books, Clippings, Vocabulary, and Remote. The bookshelf uses three columns, with book import and transfer status in its toolbar. Open a book to browse its clippings. Transfers are written to `/mnt/us/documents/Downloads/Items01` (created automatically when needed).
 
-Clippings and Vocabulary each have a “Review” entry. Clipping review favors less-reviewed entries and interleaves different books, with favorite, hide, next, a three-second undo, and a daily count. Vocabulary review uses the same learning steps and SM-2-style intervals as iOS; rating a card advances the queue, and learning cards reappear when due. Definitions can be added from the word details, are searchable, and appear on the review answer side.
+Clippings and Vocabulary each have a “Review” entry. Clipping review favors less-reviewed entries and interleaves different books, with favorite, hide, next, a three-second undo, and a daily count. Vocabulary review uses SM-2-style intervals; rating a card advances the queue, and learning cards reappear when due. Definitions can be added from the word details, are searchable, and appear on the review answer side.
 
 Settings → Home screen widget previews the daily favorite card in Default, Terminal green, or Terminal amber. The terminal styles use Terminus for Latin text. Both styles and the default card use Zhuque Fangsong for Chinese text. Long-press the home screen to add the KPilot “Daily favorite” widget. It switches to another favorite clipping at local midnight. Tap the arrow to switch immediately. Favorites are mirrored into an app-private file so the widget can work offline.
 
-Review data can be shared between phones through the Kindle itself, with no account or cloud service. On connection and pull-to-refresh the app merges its local data with `/mnt/us/kpilot/learning/state.json` under a Kindle-side lock, then atomically replaces the file and verifies the read-back. Favorites and hidden flags merge field by field (latest update wins); vocabulary cards and definitions use per-record latest-write wins with the phone ID as a tiebreaker; review counts keep the larger value. Daily review counts remain local to each phone. The file does not contain SSH credentials. Cross-phone sharing currently applies to the Android app; the iOS app does not yet read or write this file.
+Review data can be shared between phones through the Kindle itself, with no account or cloud service. On connection and pull-to-refresh the app merges its local data with `/mnt/us/kpilot/learning/state.json` under a Kindle-side lock, then atomically replaces the file and verifies the read-back. Favorites and hidden flags merge field by field (latest update wins); vocabulary cards and definitions use per-record latest-write wins with the phone ID as a tiebreaker; review counts keep the larger value. Daily review counts remain local to each phone. The file does not contain SSH credentials.
 
 Settings groups Kindle Connection, Bottom Navigation, Local Data, About, and Support the Author. Connection supports multiple Kindle profiles. Local Data provides file import, library backup export, cache information, and local-data clearing. Passwords are encrypted with Android Keystore.
 
