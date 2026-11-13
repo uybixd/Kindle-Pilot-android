@@ -140,7 +140,7 @@ internal class MatchIndex(
             }
             return sorted[0].second
         }
-        require(timestampFallback.size <= 1) { "多个 Kindle 文件具有相同标注时间，无法安全确定写入目标" }
+        require(timestampFallback.size <= 1) { "多条 Kindle 标注具有相同标注时间，无法安全确定写入目标" }
         return timestampFallback.singleOrNull()
     }
 

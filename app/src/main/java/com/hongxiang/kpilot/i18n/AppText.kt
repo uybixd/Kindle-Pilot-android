@@ -307,7 +307,7 @@ private val chineseToEnglish = mapOf(
     "无法确认 Kindle 阅读器状态，请回到主页后重试" to "Could not confirm reader status. Return to the Kindle home screen and retry.",
     "请退出 Kindle 阅读器，回到主页后再次写入批注" to "Exit the Kindle reader and return home before writing notes",
     "多条 Kindle 标注具有相同位置和时间，无法安全确定写入目标" to "Multiple Kindle highlights have the same location and time; writing was stopped",
-    "多个 Kindle 文件具有相同标注时间，无法安全确定写入目标" to "Multiple Kindle files have matching annotation times; writing was stopped",
+    "多条 Kindle 标注具有相同标注时间，无法安全确定写入目标" to "Multiple Kindle annotations have the same timestamp; writing was stopped",
     "没有找到与这条标注匹配的 Kindle 批注文件" to "No Kindle annotation file matches this highlight",
     "Kindle 笔记数据缺失" to "Kindle note data is missing",
     "标注缺少位置" to "The highlight has no location",
