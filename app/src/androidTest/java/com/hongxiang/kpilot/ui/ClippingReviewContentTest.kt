@@ -1,8 +1,12 @@
 package com.hongxiang.kpilot.ui
 
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
@@ -12,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipe
@@ -19,15 +24,20 @@ import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hongxiang.kpilot.UiState
 import com.hongxiang.kpilot.i18n.localizeAppText
 import com.hongxiang.kpilot.notes.ClippingKind
 import com.hongxiang.kpilot.notes.KindleClipping
+import com.hongxiang.kpilot.notes.KindleNote
 import com.hongxiang.kpilot.review.ClippingReviewAction
 import com.hongxiang.kpilot.review.ClippingReviewRecord
 import com.hongxiang.kpilot.review.ClippingReviewUndo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -42,6 +52,48 @@ class ClippingReviewContentTest {
     private var undoClicks = 0
     private var undoKeptBook = false
     private val card = SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions)
+
+    @Test fun longClippingShrinksToFitAndShortClippingRestoresOriginalSize() {
+        val long = clipping("long", 20, "计算机技术已经飞速发展，我用来工作的第一台计算机是 IBM7030 Stretch。".repeat(8))
+        val current = mutableStateOf(long)
+        var originalFontSize = 0f
+        compose.setContent {
+            MaterialTheme {
+                originalFontSize = MaterialTheme.typography.titleLarge.fontSize.value
+                ClippingReviewCard(current.value, false, Modifier.size(320.dp, 500.dp))
+            }
+        }
+
+        val longLayout = clippingTextLayout(long.id)
+        assertTrue(longLayout.layoutInput.style.fontSize.value < originalFontSize)
+        assertFullClippingVisible(longLayout, long.text)
+
+        val short = clipping("short", 30, "一条简短的摘抄。")
+        compose.runOnIdle { current.value = short }
+        val shortLayout = clippingTextLayout(short.id)
+        assertEquals(originalFontSize, shortLayout.layoutInput.style.fontSize.value, 0.01f)
+        assertFullClippingVisible(shortLayout, short.text)
+    }
+
+    @Test fun longClippingFitsAlongsideAnnotationWithLargerSystemFont() {
+        val text = "我实在无法想像还有哪种生活会比热爱计算机更加激动人心。".repeat(6)
+        val annotation = "这段话记录了作者对计算机的热爱。"
+        val clipping = clipping("annotated", 20, text).copy(
+            kindleNotes = listOf(KindleNote("note", null, null, null, null, null, "", annotation, ""))
+        )
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.3f)) {
+                MaterialTheme {
+                    ClippingReviewCard(clipping, false, Modifier.size(320.dp, 500.dp))
+                }
+            }
+        }
+
+        assertFullClippingVisible(clippingTextLayout(clipping.id), text)
+        compose.onNodeWithText(annotation).assertIsDisplayed()
+        compose.onNodeWithText(clipping.bookTitle).assertIsDisplayed()
+    }
 
     @Test fun swipingInAnySupportedDirectionAdvancesALongClipping() {
         showClipping()
@@ -205,6 +257,19 @@ class ClippingReviewContentTest {
         kind = ClippingKind.HIGHLIGHT, location = location.toString(), locationStart = location, locationEnd = location,
         page = null, addedAt = null, metadata = "", text = text, raw = ""
     )
+
+    private fun clippingTextLayout(id: String): TextLayoutResult {
+        val results = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithTag("review-text-$id", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+        return results.single()
+    }
+
+    private fun assertFullClippingVisible(layout: TextLayoutResult, text: String) {
+        assertFalse(layout.hasVisualOverflow)
+        assertFalse(layout.isLineEllipsized(layout.lineCount - 1))
+        assertEquals(text.length, layout.getLineEnd(layout.lineCount - 1))
+    }
 
     private fun label(value: String) = InstrumentationRegistry.getInstrumentation().targetContext.localizeAppText(value)
 }

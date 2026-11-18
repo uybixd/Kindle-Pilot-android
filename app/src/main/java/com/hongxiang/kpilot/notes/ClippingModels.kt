@@ -253,7 +253,8 @@ object ClippingsParser {
             val target = highlights.asSequence()
                 .filter { it.bookId == note.bookId }
                 .mapNotNull { highlight -> noteMatchScore(note, highlight)?.let { it to highlight } }
-                .minWithOrNull(compareBy<Pair<NoteMatchScore, KindleClipping>> { it.first.containment }
+                .minWithOrNull(compareByDescending<Pair<NoteMatchScore, KindleClipping>> { it.first.exactRange }
+                    .thenBy { it.first.containment }
                     .thenBy { it.first.distance }
                     .thenBy { it.first.span })
                 ?.second
@@ -282,6 +283,7 @@ object ClippingsParser {
         val overlaps = noteStart <= highlightEnd && noteEnd >= highlightStart
         if (!contains && !overlaps) return null
         return NoteMatchScore(
+            exactRange = noteStart == highlightStart && noteEnd == highlightEnd,
             containment = if (contains) 0 else 1,
             distance = rangeDistance(noteStart, noteEnd, highlightStart, highlightEnd),
             span = highlightEnd - highlightStart
@@ -350,7 +352,7 @@ object ClippingsParser {
         val compactedText: String
     )
     private data class DeduplicationResult(val records: List<KindleClipping>, val filteredCount: Int)
-    private data class NoteMatchScore(val containment: Int, val distance: Int, val span: Int)
+    private data class NoteMatchScore(val exactRange: Boolean, val containment: Int, val distance: Int, val span: Int)
 }
 
 data class ClippingsParseResult(

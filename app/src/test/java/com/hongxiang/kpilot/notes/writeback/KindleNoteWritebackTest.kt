@@ -193,6 +193,38 @@ class KindleNoteWritebackTest {
         assertEquals(2, connection.replaces)
     }
 
+    @Test fun syncingNotesPrefersTheFullRangeOfAnOverlappingHighlight() {
+        val shortSource = source("测试2222").replace("11-13", "11")
+            .replace("A complete example highlight.", "A short selection.")
+        val longSource = source.replace("11-13", "11-12")
+        val exported = shortSource + longSource
+        val target = ClippingsParser.parse(exported).single { it.location == "11-12" }
+
+        val store = fixture("1500", "1550")
+        val shortHighlight = store.annotations().single()
+        val cache = store.values.first() as KrdsValue.ObjectValue
+        val tree = cache.values[2] as KrdsValue.ObjectValue
+        tree.values[0] = KrdsValue.Integer(2)
+        tree.values.add(KrdsValue.ObjectValue("annotation.personal.highlight", mutableListOf(
+            KrdsValue.Utf("1600"), KrdsValue.Utf("1700"), KrdsValue.LongValue(time),
+            KrdsValue.LongValue(time), KrdsValue.Utf(shortHighlight.template)
+        )))
+        val existingNote = store.updateNote(shortHighlight, emptySet(), "测试2222", time, false)
+        val connection = FakeConnection(exported, store)
+
+        val draft = NoteDraft(target.id, "测试3333", kindleBaseText = "")
+        val result = service().syncDraft(connection, target, draft, null) as NoteDraftSyncResult.Accepted
+
+        val clippings = ClippingsParser.parse(ClippingsTextDecoder.decode(requireNotNull(result.written).clippingsBytes))
+            .associateBy { it.location }
+        assertEquals("测试2222", clippings.getValue("11").kindleNotes.single().text)
+        assertEquals("测试3333", clippings.getValue("11-12").kindleNotes.single().text)
+        val nativeNotes = KindleReaderDataStore.decode(connection.files.getValue(path)).annotations()
+            .filter { it.type == KindleReaderDataStore.NOTE }
+        assertEquals(existingNote, nativeNotes.single { it.startPosition == shortHighlight.startPosition })
+        assertEquals("测试3333", nativeNotes.single { it.startPosition == "1600" }.note)
+    }
+
     @Test fun staleClippingsCannotHideKindleDeletionOrOverrideAConflictChoice() {
         val connection = FakeConnection(source("old note"))
         val draft = NoteDraft(clipping.id, "from phone", kindleBaseText = "old note")

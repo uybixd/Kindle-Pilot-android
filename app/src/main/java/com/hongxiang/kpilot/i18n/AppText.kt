@@ -1,6 +1,7 @@
 package com.hongxiang.kpilot.i18n
 
 import android.content.Context
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text as MaterialText
 import androidx.compose.runtime.Composable
@@ -715,7 +716,8 @@ fun AppText(
     maxLines: Int = Int.MAX_VALUE,
     minLines: Int = 1,
     onTextLayout: ((TextLayoutResult) -> Unit)? = null,
-    style: TextStyle = LocalTextStyle.current
+    style: TextStyle = LocalTextStyle.current,
+    autoSize: TextAutoSize? = null
 ) = MaterialText(
     text = localizedText(text),
     modifier = modifier,
@@ -733,5 +735,6 @@ fun AppText(
     maxLines = maxLines,
     minLines = minLines,
     onTextLayout = onTextLayout,
-    style = style
+    style = style,
+    autoSize = autoSize
 )

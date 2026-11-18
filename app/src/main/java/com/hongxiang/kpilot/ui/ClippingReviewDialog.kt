@@ -28,6 +28,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -72,6 +73,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -334,7 +336,7 @@ private fun ClippingReviewHeader(title: String, status: String, backLabel: Strin
 }
 
 @Composable
-private fun ClippingReviewCard(
+internal fun ClippingReviewCard(
     clipping: KindleClipping,
     isFavorite: Boolean,
     modifier: Modifier,
@@ -364,11 +366,21 @@ private fun ClippingReviewCard(
                 if (inBook) body.verticalScroll(rememberScrollState()) else body,
                 verticalArrangement = Arrangement.Center
             ) {
+                val bodyStyle = MaterialTheme.typography.titleLarge
                 Text(
                     clipping.text,
-                    modifier = if (inBook) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().weight(2f, fill = false),
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, lineHeight = 32.sp),
-                    maxLines = if (inBook) Int.MAX_VALUE else 14,
+                    modifier = (if (inBook) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().weight(2f, fill = false))
+                        .testTag("review-text-${clipping.id}"),
+                    style = bodyStyle.copy(
+                        fontWeight = FontWeight.Normal,
+                        // Keep the original spacing ratio as the font shrinks to fit the card.
+                        lineHeight = (32f / bodyStyle.fontSize.value).em
+                    ),
+                    autoSize = if (inBook) null else TextAutoSize.StepBased(
+                        minFontSize = 12.sp,
+                        maxFontSize = bodyStyle.fontSize,
+                        stepSize = 0.5.sp
+                    ),
                     overflow = TextOverflow.Ellipsis
                 )
                 if (note != null) {
