@@ -166,6 +166,7 @@ import com.hongxiang.kpilot.notes.NotesRetryPolicy
 import com.hongxiang.kpilot.remote.AccessibilityStatus
 import com.hongxiang.kpilot.remote.FlipCommandDefinition
 import com.hongxiang.kpilot.remote.RemoteKeyPolicy
+import com.hongxiang.kpilot.ssh.LocalNetworkAccess
 import com.hongxiang.kpilot.support.SupportKPilotEntry
 import com.hongxiang.kpilot.transfer.CollisionDecision
 import com.hongxiang.kpilot.transfer.SupportedTransferTypes
@@ -264,6 +265,42 @@ private fun KPilotApp(viewModel: MainViewModel) {
     val coroutineScope = rememberCoroutineScope()
     val showingNoteDetail = destination == Destination.NOTES && state.selectedNoteId != null
     val showingSecondaryScreen = transientDestination && destination.navigationItem !in state.navigationItems
+
+    // Android 17 (API 37) silently drops LAN traffic until ACCESS_LOCAL_NETWORK is granted,
+    // which otherwise only surfaces as an SSH "socket is not established" timeout.
+    var connectAfterLocalNetworkGrant by rememberSaveable { mutableStateOf(false) }
+    var localNetworkPermissionRequested by rememberSaveable { mutableStateOf(false) }
+    val localNetworkPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val shouldConnect = connectAfterLocalNetworkGrant
+        connectAfterLocalNetworkGrant = false
+        if (!granted) {
+            Toast.makeText(
+                context,
+                context.localizeAppText("未授予本地网络权限，无法连接同一 Wi-Fi 下的 Kindle"),
+                Toast.LENGTH_LONG
+            ).show()
+        } else if (shouldConnect) {
+            viewModel.connectKindle()
+        }
+    }
+
+    fun connectKindleWithLocalNetworkPermission() {
+        if (LocalNetworkAccess.granted(context)) {
+            viewModel.connectKindle()
+        } else {
+            connectAfterLocalNetworkGrant = true
+            localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+        }
+    }
+
+    LaunchedEffect(state.settings.host) {
+        if (!localNetworkPermissionRequested && state.settings.host.isNotBlank() &&
+            !LocalNetworkAccess.granted(context)
+        ) {
+            localNetworkPermissionRequested = true
+            localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+        }
+    }
 
     fun navigateTo(item: Destination) {
         if (item != destination) {
@@ -529,7 +566,7 @@ private fun KPilotApp(viewModel: MainViewModel) {
                         noteReturnDestination = Destination.SETTINGS
                         viewModel.selectNote(note.id)
                         navigateTo(Destination.NOTES)
-                    })
+                    }, onConnect = { connectKindleWithLocalNetworkPermission() })
                 } else Scaffold(
                     contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     containerColor = if (page.isReadingList(state.selectedNoteId != null)) MaterialTheme.colorScheme.surfaceContainer

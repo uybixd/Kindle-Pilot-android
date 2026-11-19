@@ -63,7 +63,7 @@ private enum class Page(val title: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenClipping: (KindleClipping) -> Unit) {
+fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenClipping: (KindleClipping) -> Unit, onConnect: () -> Unit) {
     val isActive = LocalTabActive.current
     var page by rememberSaveable { mutableStateOf(Page.HOME) }
     var advanced by rememberSaveable { mutableStateOf(false) }
@@ -92,7 +92,7 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenClipping: (Ki
                 Page.HOME -> {
                     Group {
                         Entry("Kindle 连接", Icons.Filled.Lan, subtitle = if (state.settings.host.isBlank()) "填写 IP 地址和 SSH 密码" else "${state.profiles.firstOrNull { it.id == state.activeProfileId }?.name ?: "Kindle"} · ${if(state.connected) "已连接" else "未连接"}", onClick = { page = Page.CONNECTION })
-                        if (state.settings.host.isNotBlank()) { HorizontalDivider(); ConnectRow(viewModel,state,busy) }
+                        if (state.settings.host.isNotBlank()) { HorizontalDivider(); ConnectRow(state,busy,onConnect) }
                     }
                     Group {
                         Entry("底部导航栏", Icons.Filled.ViewAgenda, onClick = { page = Page.NAVIGATION })
@@ -121,7 +121,7 @@ fun SettingsScreen(viewModel: MainViewModel, state: UiState, onOpenClipping: (Ki
                             TextButton(onClick=viewModel::forgetHostKeys,enabled=!busy,modifier=Modifier.padding(horizontal=8.dp)) { Text("清除已记录的主机密钥",color=MaterialTheme.colorScheme.error) }
                         }
                     }
-                    Group { ConnectRow(viewModel,state,busy) }
+                    Group { ConnectRow(state,busy,onConnect) }
                     Group("连接状态") { Text(state.connectionMessage,modifier=Modifier.padding(16.dp),style=MaterialTheme.typography.bodyMedium,color=if(state.connectionError)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
                     Group {
                         Action("添加 Kindle",Icons.Filled.Add,!busy,viewModel::addProfile)
@@ -270,7 +270,7 @@ private fun FavoriteWidgetPreview(note: FavoriteWidgetNote?, style: FavoriteWidg
 @Composable private fun Entry(title:String,icon:ImageVector,subtitle:String?=null,value:String?=null,onClick:()->Unit) {
     ListItem(headlineContent={Text(title)},supportingContent=subtitle?.let{{Text(it)}},leadingContent={Icon(icon,null,tint=MaterialTheme.colorScheme.primary)},trailingContent={Row(verticalAlignment=Alignment.CenterVertically){value?.let{Text(it,color=MaterialTheme.colorScheme.onSurfaceVariant)};Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,null)}},colors=ListItemDefaults.colors(containerColor=androidx.compose.ui.graphics.Color.Transparent),modifier=Modifier.clickable(onClick=onClick))
 }
-@Composable private fun ConnectRow(viewModel:MainViewModel,state:UiState,busy:Boolean) { Action("连接 Kindle",Icons.Filled.Lan,!busy&&state.settings.host.isNotBlank(),viewModel::connectKindle) }
+@Composable private fun ConnectRow(state:UiState,busy:Boolean,onConnect:()->Unit) { Action("连接 Kindle",Icons.Filled.Lan,!busy&&state.settings.host.isNotBlank(),onConnect) }
 @Composable private fun Action(title:String,icon:ImageVector,enabled:Boolean=true,onClick:()->Unit) { TextButton(onClick=onClick,enabled=enabled,modifier=Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp)){Icon(icon,null);Spacer(Modifier.width(12.dp));Text(title,modifier=Modifier.weight(1f));} }
 @Composable private fun Value(label:String,value:String) { Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=Alignment.CenterVertically){Text(label,modifier=Modifier.weight(1f));Text(value,color=MaterialTheme.colorScheme.onSurfaceVariant)} }
 @Composable private fun Toggle(title:String,checked:Boolean,onChange:(Boolean)->Unit) { Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically){Text(title,modifier=Modifier.weight(1f));Switch(checked,onChange)} }

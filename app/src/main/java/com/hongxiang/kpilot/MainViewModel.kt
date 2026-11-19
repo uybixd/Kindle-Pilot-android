@@ -49,6 +49,7 @@ import com.hongxiang.kpilot.notes.NotesDiagnostics
 import com.hongxiang.kpilot.notes.NotesSyncException
 import com.hongxiang.kpilot.ssh.KindleSshClient
 import com.hongxiang.kpilot.ssh.KindleIdentityService
+import com.hongxiang.kpilot.ssh.LocalNetworkAccess
 import com.hongxiang.kpilot.remote.AccessibilityStatus
 import com.hongxiang.kpilot.remote.FlipCommandDefinition
 import com.hongxiang.kpilot.remote.RemoteCommandDispatcher
@@ -1221,6 +1222,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application), C
     fun connectKindle() {
         val current = state.value
         if (current.connectionBusy || current.localDataBusy) return
+        if (!LocalNetworkAccess.granted(getApplication())) {
+            mutableState.update {
+                it.copy(
+                    connectionMessage = LocalNetworkAccess.DENIED_MESSAGE,
+                    connectionError = true,
+                    status = LocalNetworkAccess.DENIED_MESSAGE,
+                    isError = true
+                )
+            }
+            return
+        }
         val settings = current.settings
         mutableState.update { it.copy(connectionBusy = true, connectionMessage = "正在连接 Kindle…", connectionError = false, status = "正在连接 Kindle…", isError = false) }
         viewModelScope.launch {
