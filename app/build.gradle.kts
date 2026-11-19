@@ -52,8 +52,8 @@ android {
         applicationId = "com.hongxiang.kpilot"
         minSdk = 24
         targetSdk = 37
-        versionCode = 12
-        versionName = "1.1.2"
+        versionCode = 13
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -69,6 +69,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Keep the test build installable next to the user's existing KPilot.
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-test"
+        }
         release {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("localRelease")
