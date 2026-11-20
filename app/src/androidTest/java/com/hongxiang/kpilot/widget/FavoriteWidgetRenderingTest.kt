@@ -27,7 +27,9 @@ import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hongxiang.kpilot.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -116,7 +118,7 @@ class FavoriteWidgetRenderingTest {
     }
 
     @Test
-    fun terminalDrawsOnePixelBorderAroundTheLauncherHost() {
+    fun terminalStylesKeepBlackEdgesAndRoundedCornersInBothSystemThemes() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val host = instrumentation.context
@@ -124,31 +126,37 @@ class FavoriteWidgetRenderingTest {
         val width = context.pixels(338)
         val bitmapHeight = context.pixels(158)
         val hostHeight = context.pixels(174)
-        val green = Color.rgb(0, 230, 118)
-        val style = FavoriteWidgetStyle.TERMINAL
-        val preview = FavoriteWidgetCard.render(context, note, style, FavoriteWidgetSize.MEDIUM, width, bitmapHeight)
-        val previewEdge = preview.bitmap.getPixel(width / 2, 0)
-        assertEquals(0, Color.red(previewEdge))
-        assertTrue(Color.blue(previewEdge) in 1..Color.blue(green))
-        assertTrue(Color.green(previewEdge) in 1..Color.green(green))
-        assertTrue(Color.alpha(previewEdge) > 0)
-        assertEquals(Color.BLACK, preview.bitmap.getPixel(width / 2, 1))
-        assertEquals(Color.TRANSPARENT, preview.bitmap.getPixel(0, 0))
+        for (nightMode in listOf(Configuration.UI_MODE_NIGHT_NO, Configuration.UI_MODE_NIGHT_YES)) {
+            val config = Configuration().apply { uiMode = nightMode }
+            val themedContext = context.createConfigurationContext(config)
+            val themedHost = host.createConfigurationContext(config)
+            for (style in listOf(FavoriteWidgetStyle.TERMINAL, FavoriteWidgetStyle.TERMINAL_AMBER)) {
+                val preview = FavoriteWidgetCard.render(
+                    themedContext, note, style, FavoriteWidgetSize.MEDIUM, width, bitmapHeight
+                )
+                assertEquals(Color.BLACK, preview.bitmap.getPixel(width / 2, 0))
+                assertEquals(Color.TRANSPARENT, preview.bitmap.getPixel(0, 0))
 
-        val root = FavoriteWidgetProvider.buildRemoteViews(context, note, options(338, 158), style)
-            .apply(host, FrameLayout(host))
-        val image = root.findViewById<ImageView>(R.id.widget_card)
-        assertEquals(Color.TRANSPARENT, (image.drawable as BitmapDrawable).bitmap.getPixel(width / 2, 0))
-        root.measure(
-            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(hostHeight, View.MeasureSpec.EXACTLY)
-        )
-        root.layout(0, 0, width, hostHeight)
-        val hostBitmap = createBitmap(width, hostHeight)
-        root.draw(Canvas(hostBitmap))
-        assertEquals(previewEdge, hostBitmap.getPixel(width / 2, 0))
-        assertEquals(Color.BLACK, hostBitmap.getPixel(width / 2, 1))
-        assertEquals(Color.BLACK, hostBitmap.getPixel(width / 2, (hostHeight - bitmapHeight) / 2))
+                val root = FavoriteWidgetProvider.buildRemoteViews(themedContext, note, options(338, 158), style)
+                    .apply(themedHost, FrameLayout(themedHost))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) assertFalse(root.isForceDarkAllowed)
+                val image = root.findViewById<ImageView>(R.id.widget_card)
+                val quote = (image.drawable as BitmapDrawable).bitmap
+                assertEquals(Color.TRANSPARENT, quote.getPixel(width / 2, 0))
+                root.measure(
+                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(hostHeight, View.MeasureSpec.EXACTLY)
+                )
+                root.layout(0, 0, width, hostHeight)
+                val hostBitmap = createBitmap(width, hostHeight)
+                root.draw(Canvas(hostBitmap))
+                assertEquals(Color.BLACK, hostBitmap.getPixel(width / 2, 0))
+                assertEquals(Color.BLACK, hostBitmap.getPixel(width / 2, hostHeight - 1))
+                assertEquals(Color.BLACK, hostBitmap.getPixel(0, hostHeight / 2))
+                assertEquals(Color.BLACK, hostBitmap.getPixel(width - 1, hostHeight / 2))
+                assertEquals(Color.TRANSPARENT, hostBitmap.getPixel(0, 0))
+            }
+        }
     }
 
     @Test
@@ -204,7 +212,7 @@ class FavoriteWidgetRenderingTest {
     }
 
     @Test
-    fun switchingStylesRepaintsTheExistingLauncherView() {
+    fun switchingStylesUpdatesTheLauncherView() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val host = instrumentation.context
@@ -212,67 +220,75 @@ class FavoriteWidgetRenderingTest {
         val options = options(338, 158)
         val paper = FavoriteWidgetProvider.buildRemoteViews(context, note, options, FavoriteWidgetStyle.PAPER)
         val terminal = FavoriteWidgetProvider.buildRemoteViews(context, note, options, FavoriteWidgetStyle.TERMINAL)
-        val root = paper.apply(host, FrameLayout(host))
-        val image = root.findViewById<ImageView>(R.id.widget_card)
-        val paperBitmap = (image.drawable as BitmapDrawable).bitmap
-        assertEquals(context.getColor(R.color.widget_paper_background), (root.background as GradientDrawable).color?.defaultColor)
+        val amber = FavoriteWidgetProvider.buildRemoteViews(context, note, options, FavoriteWidgetStyle.TERMINAL_AMBER)
+        instrumentation.runOnMainSync {
+            val hostView = AppWidgetHostView(host)
+            hostView.updateAppWidget(paper)
+            val paperRoot = hostView.findViewById<View>(R.id.widget_root)
+            val paperBitmap = (paperRoot.findViewById<ImageView>(R.id.widget_card).drawable as BitmapDrawable).bitmap
+            assertEquals(context.getColor(R.color.widget_paper_background), (paperRoot.background as GradientDrawable).color?.defaultColor)
 
-        terminal.reapply(host, root)
-        val terminalBitmap = (image.drawable as BitmapDrawable).bitmap
-        assertEquals(context.getColor(R.color.widget_terminal_background), (root.background as GradientDrawable).color?.defaultColor)
-        assertTrue(!paperBitmap.sameAs(terminalBitmap))
-        assertTrue(root.findViewById<View>(R.id.widget_next_touch).hasOnClickListeners())
+            hostView.updateAppWidget(terminal)
+            val terminalRoot = hostView.findViewById<View>(R.id.widget_root)
+            val image = terminalRoot.findViewById<ImageView>(R.id.widget_card)
+            val terminalBitmap = (image.drawable as BitmapDrawable).bitmap
+            assertEquals(Color.BLACK, (terminalRoot.background as GradientDrawable).color?.defaultColor)
+            assertFalse(paperBitmap.sameAs(terminalBitmap))
+
+            amber.reapply(host, terminalRoot)
+            assertFalse(terminalBitmap.sameAs((image.drawable as BitmapDrawable).bitmap))
+            assertTrue(terminalRoot.findViewById<View>(R.id.widget_next_touch).hasOnClickListeners())
+        }
     }
 
     @Test
-    fun advancingFadesOnlyTheTextAndKeepsTheExistingCard() {
+    fun advancingReplacesTheDrawableAndKeepsTheCurrentQuoteInTheDefaultChild() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val host = instrumentation.context
         val first = FavoriteWidgetNote("first", "First passage", "Reading journal")
-        val second = FavoriteWidgetNote("second", "先生曰：“为学大病在好名。”", "传习录", "王阳明", 1_800_000_000_000)
+        val nextNotes = listOf(
+            first.copy(id = "second", text = "先生曰：“为学大病在好名。”"),
+            first.copy(id = "third", text = "The third passage replaces the second drawable."),
+            first.copy(id = "fourth", text = "第四条收藏继续替换同一个图片位置。")
+        )
         val options = options(335, 364)
 
         for (style in FavoriteWidgetStyle.entries) {
             val firstViews = FavoriteWidgetProvider.buildRemoteViews(context, first, options, style)
-            val secondViews = FavoriteWidgetProvider.buildRemoteViews(
-                context, second, options, style, displayedChild = 1, animate = true
-            )
+            val nextViews = nextNotes.map { note ->
+                FavoriteWidgetProvider.buildRemoteViews(context, note, options, style, animate = true)
+            }
             instrumentation.runOnMainSync {
                 val root = firstViews.apply(host, FrameLayout(host))
                 val flipper = root.findViewById<ViewFlipper>(R.id.widget_text_flipper)
                 val divider = root.findViewById<ImageView>(R.id.widget_static_divider)
                 val arrow = root.findViewById<View>(R.id.widget_next_touch)
-                val outgoingSlot = flipper.currentView as ViewFlipper
-                val outgoing = outgoingSlot.currentView as ImageView
-                val oldText = (outgoing.drawable as BitmapDrawable).bitmap
+                val sharp = flipper.findViewById<ImageView>(R.id.widget_card)
+                val blurred = flipper.findViewById<ImageView>(R.id.widget_card_blur)
                 val oldDivider = (divider.drawable as BitmapDrawable).bitmap
 
-                secondViews.reapply(host, root)
-                val incomingSlot = flipper.currentView as ViewFlipper
-                val incoming = incomingSlot.currentView as ImageView
-                assertEquals(1, flipper.displayedChild)
-                assertEquals(incomingSlot.inAnimation, incoming.animation)
-                assertEquals(flipper.outAnimation, outgoingSlot.animation)
-                val blurred = incomingSlot.findViewById<ImageView>(R.id.widget_card_alternate_blur)
-                assertEquals(incomingSlot.outAnimation, blurred.animation)
-                assertEquals(android.graphics.Bitmap.Config.ALPHA_8, (blurred.drawable as BitmapDrawable).bitmap.config)
-                assertTrue(oldText.sameAs((outgoing.drawable as BitmapDrawable).bitmap))
-                assertTrue(!oldText.sameAs((incoming.drawable as BitmapDrawable).bitmap))
-                assertTrue(root.findViewById<View>(R.id.widget_open_touch).contentDescription.contains(second.text))
+                for ((note, views) in nextNotes.zip(nextViews)) {
+                    val previous = sharp.drawable as BitmapDrawable
+                    views.reapply(host, root)
+                    val current = sharp.drawable as BitmapDrawable
+                    assertEquals(0, flipper.displayedChild)
+                    assertEquals(sharp, flipper.currentView)
+                    assertNotSame(previous, current)
+                    assertFalse(previous.bitmap.sameAs(current.bitmap))
+                    assertEquals(flipper.inAnimation, sharp.animation)
+                    assertEquals(flipper.outAnimation, blurred.animation)
+                    assertEquals(android.graphics.Bitmap.Config.ALPHA_8, (blurred.drawable as BitmapDrawable).bitmap.config)
+                    assertTrue(root.findViewById<View>(R.id.widget_open_touch).contentDescription.contains(note.text))
+                }
                 assertTrue(oldDivider.sameAs((divider.drawable as BitmapDrawable).bitmap))
                 for (view in listOf(root, divider, arrow)) assertEquals(null, view.animation)
 
-                firstViews.reapply(host, root)
-                assertEquals(0, flipper.displayedChild)
-                assertEquals(outgoingSlot, flipper.currentView)
-
-                val freshRoot = secondViews.apply(host, FrameLayout(host))
+                val freshRoot = nextViews.last().apply(host, FrameLayout(host))
                 val freshFlipper = freshRoot.findViewById<ViewFlipper>(R.id.widget_text_flipper)
-                assertEquals(1, freshFlipper.displayedChild)
-                val freshSlot = freshFlipper.currentView as ViewFlipper
-                assertTrue((freshSlot.currentView as ImageView).drawable is BitmapDrawable)
-                assertEquals(null, freshSlot.animation)
+                assertEquals(0, freshFlipper.displayedChild)
+                val freshText = (freshFlipper.currentView as ImageView).drawable as BitmapDrawable
+                assertTrue((sharp.drawable as BitmapDrawable).bitmap.sameAs(freshText.bitmap))
             }
         }
     }

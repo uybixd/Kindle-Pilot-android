@@ -3,7 +3,4 @@
     android:shape="rectangle">
     <solid android:color="@color/widget_terminal_background" />
     <corners android:radius="24dp" />
-    <stroke
-        android:width="1px"
-        android:color="@color/widget_terminal_foreground" />
 </shape>

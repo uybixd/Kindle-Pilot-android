@@ -101,7 +101,6 @@ internal object FavoriteWidgetCard {
         val density = context.resources.displayMetrics.density
 
         if (terminal) {
-            card.setBackgroundResource(style.background)
             val foreground = context.getColor(style.dividerColor)
             card.findViewById<View>(R.id.widget_divider).setBackgroundColor(foreground)
             val regular = ResourcesCompat.getFont(context, R.font.terminus_regular) ?: Typeface.MONOSPACE
@@ -289,16 +288,12 @@ internal data class RenderedFavoriteCard(
 internal enum class FavoriteWidgetStyle(
     val key: String,
     val label: String,
-    @get:DrawableRes val background: Int,
     @get:DrawableRes val nextIcon: Int,
     @get:ColorRes val dividerColor: Int
 ) {
-    PAPER("paper", "默认", R.drawable.widget_paper_background, R.drawable.ic_widget_paper_next,
-        R.color.widget_paper_divider),
-    TERMINAL("terminal", "终端绿", R.drawable.widget_terminal_background, R.drawable.ic_widget_next,
-        R.color.widget_terminal_foreground),
-    TERMINAL_AMBER("terminal_amber", "终端琥珀", R.drawable.widget_terminal_amber_background,
-        R.drawable.ic_widget_next, R.color.widget_terminal_amber_foreground);
+    PAPER("paper", "默认", R.drawable.ic_widget_paper_next, R.color.widget_paper_divider),
+    TERMINAL("terminal", "终端绿", R.drawable.ic_widget_next, R.color.widget_terminal_foreground),
+    TERMINAL_AMBER("terminal_amber", "终端琥珀", R.drawable.ic_widget_next, R.color.widget_terminal_amber_foreground);
 
     val isTerminal: Boolean get() = this != PAPER
 

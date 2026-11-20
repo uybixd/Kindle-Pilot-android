@@ -7,6 +7,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.util.SizeF
@@ -87,10 +88,9 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
             if (advance && !store.advance()) return
             val note = store.currentNote()
             val style = store.style
-            val displayedChild = store.displayedChild()
             ids.forEach { id ->
                 val options = manager.getAppWidgetOptions(id)
-                manager.updateAppWidget(id, buildRemoteViews(context, note, options, style, displayedChild, advance))
+                manager.updateAppWidget(id, buildRemoteViews(context, note, options, style, animate = advance))
             }
             scheduleDailyRefresh(context)
         }
@@ -100,7 +100,6 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
             note: FavoriteWidgetNote?,
             options: Bundle,
             style: FavoriteWidgetStyle,
-            displayedChild: Int = 0,
             animate: Boolean = false
         ): RemoteViews {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -118,7 +117,7 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
                             (size.width - HOST_INSETS_DP).coerceAtLeast(1f),
                             (size.height - HOST_INSETS_DP).coerceAtLeast(1f)
                         )
-                        minimum to cardViews(context, note, style, size, scale, displayedChild, animate)
+                        minimum to cardViews(context, note, style, size, scale, animate)
                     })
                 }
             }
@@ -137,9 +136,9 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
                 widgetDimension(minHeight, maxHeight, defaultSize.height)
             )
             val scale = bitmapScale(context, listOf(portrait, landscape).distinct())
-            val portraitViews = cardViews(context, note, style, portrait, scale, displayedChild, animate)
+            val portraitViews = cardViews(context, note, style, portrait, scale, animate)
             return if (landscape == portrait) portraitViews else RemoteViews(
-                cardViews(context, note, style, landscape, scale, displayedChild, animate),
+                cardViews(context, note, style, landscape, scale, animate),
                 portraitViews
             )
         }
@@ -162,7 +161,6 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
             style: FavoriteWidgetStyle,
             dimensions: SizeF,
             bitmapScale: Float,
-            displayedChild: Int,
             animate: Boolean
         ): RemoteViews {
             val density = context.resources.displayMetrics.density
@@ -180,28 +178,21 @@ class FavoriteWidgetProvider : AppWidgetProvider() {
             )
             // The launcher applies RemoteViews in a restricted context. Sending the
             // rendered card keeps its font independent of the launcher's typeface.
-            val views = RemoteViews(context.packageName, R.layout.widget_favorite_host)
-            views.setInt(R.id.widget_root, "setBackgroundResource", style.background)
+            val layout = if (style.isTerminal) R.layout.widget_favorite_terminal_host else R.layout.widget_favorite_host
+            val views = RemoteViews(context.packageName, layout)
             views.setImageViewBitmap(R.id.widget_static_divider, card.divider)
             views.setInt(R.id.widget_static_divider, "setColorFilter", context.getColor(style.dividerColor))
-            val (textView, blurView, focusView) = if (displayedChild == 0) {
-                Triple(R.id.widget_card, R.id.widget_card_blur, R.id.widget_card_focus)
-            } else {
-                Triple(R.id.widget_card_alternate, R.id.widget_card_alternate_blur, R.id.widget_card_alternate_focus)
-            }
-            views.setImageViewBitmap(textView, card.bitmap)
+            // Replace the drawable on each update. HyperOS can keep drawing the old
+            // pixels when ImageView.setImageBitmap reuses the drawable.
+            views.setImageViewIcon(R.id.widget_card, Icon.createWithBitmap(card.bitmap))
             if (card.blurredText != null) {
-                views.setImageViewBitmap(blurView, card.blurredText)
+                views.setImageViewIcon(R.id.widget_card_blur, Icon.createWithBitmap(card.blurredText))
                 val blurColor = if (style.isTerminal) style.dividerColor else R.color.widget_paper_foreground
-                views.setInt(blurView, "setColorFilter", context.getColor(blurColor))
+                views.setInt(R.id.widget_card_blur, "setColorFilter", context.getColor(blurColor))
+                views.setDisplayedChild(R.id.widget_text_flipper, 1)
             }
-            // The nested flipper briefly draws the blurred bitmap while sharp text fades in.
-            views.setDisplayedChild(focusView, 0)
-            if (card.blurredText != null) {
-                views.setDisplayedChild(focusView, 1)
-                views.setDisplayedChild(focusView, 0)
-            }
-            views.setDisplayedChild(R.id.widget_text_flipper, displayedChild)
+            // Keep the current quote in the default child when the host recreates its views.
+            views.setDisplayedChild(R.id.widget_text_flipper, 0)
             views.setContentDescription(R.id.widget_open_touch, card.description)
             views.setViewVisibility(
                 R.id.widget_next_touch,

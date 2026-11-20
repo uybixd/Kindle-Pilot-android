@@ -193,6 +193,99 @@ class KindleNoteWritebackTest {
         assertEquals(2, connection.replaces)
     }
 
+    @Test fun mobiCompositePositionsAttributeADeviceNoteToItsHighlight() {
+        val highlightStart = "492684:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val highlightEnd = "492693:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val noteStart = "492690:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val store = storeWith(
+            listOf(highlightStart to highlightEnd),
+            listOf(Triple(noteStart, highlightEnd, "Test"))
+        )
+        val text = "Example\n- Your Highlight on Location 3285-3285 | Added on ${stamp()}\n\n叶戈尔\n==========\n"
+        val clipping = ClippingsParser.parse(text).single()
+        val connection = FakeConnection(text, store)
+
+        val result = service().syncDraft(
+            connection, clipping, NoteDraft(clipping.id, "踏踏开", kindleBaseText = "Test"), null
+        )
+
+        assertTrue(result is NoteDraftSyncResult.Accepted)
+        val notes = KindleReaderDataStore.decode(connection.files.getValue(path)).annotations()
+            .filter { it.type == KindleReaderDataStore.NOTE }
+        assertEquals(1, notes.size)
+        assertEquals("踏踏开", notes.single().note)
+        assertEquals(noteStart, notes.single().startPosition)
+    }
+
+    @Test fun deviceNoteOnAnotherHighlightDoesNotBlockTheTarget() {
+        val firstStart = "492684:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val firstEnd = "492693:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val noteStart = "492690:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val targetStart = "492800:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val targetEnd = "492810:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val store = storeWith(
+            listOf(firstStart to firstEnd, targetStart to targetEnd),
+            listOf(Triple(noteStart, firstEnd, "Test"))
+        )
+        val text = "Example\n- Your Highlight on Location 3286-3286 | Added on ${stamp()}\n\n另一个\n==========\n"
+        val clipping = ClippingsParser.parse(text).single()
+        val connection = FakeConnection(text, store)
+
+        val result = service().syncDraft(connection, clipping, NoteDraft(clipping.id, "新批注", kindleBaseText = ""), null)
+
+        assertTrue(result is NoteDraftSyncResult.Accepted)
+        val notes = KindleReaderDataStore.decode(connection.files.getValue(path)).annotations()
+            .filter { it.type == KindleReaderDataStore.NOTE }
+        assertEquals(2, notes.size)
+        assertEquals("Test", notes.single { it.startPosition == noteStart }.note)
+        assertEquals("新批注", notes.single { it.startPosition == targetStart }.note)
+    }
+
+    @Test fun deviceNoteThatOnlyOverlapsTheTargetStaysBlocked() {
+        val highlightStart = "492684:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val highlightEnd = "492693:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val orphanStart = "492680:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val orphanEnd = "492690:492458:3263:REFUQQAAAFhFQkFSAAAAAQ"
+        val store = storeWith(
+            listOf(highlightStart to highlightEnd),
+            listOf(Triple(orphanStart, orphanEnd, "旧批注"))
+        )
+        val text = "Example\n- Your Highlight on Location 3285-3285 | Added on ${stamp()}\n\n叶戈尔\n==========\n"
+        val clipping = ClippingsParser.parse(text).single()
+        val connection = FakeConnection(text, store)
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            service().syncDraft(connection, clipping, NoteDraft(clipping.id, "踏踏开"), null)
+        }
+
+        assertTrue(error.message.orEmpty().contains("无法确定这条 Kindle 批注的位置"))
+        assertEquals(0, connection.replaces)
+    }
+
+    @Test fun kfxDeviceNoteSharingTheHighlightEndAnchorIsAttributed() {
+        val kfxPath = path.replace(".azw3r", ".yjr")
+        val highlightStart = "AT8BAAAAAAAA:11017"
+        val highlightEnd = "AT8BAABbAAAA:11108"
+        val noteStart = "AT8BAABaAAAA:11107"
+        val store = storeWith(
+            listOf(highlightStart to highlightEnd),
+            listOf(Triple(noteStart, highlightEnd, "茧房"))
+        )
+        val text = "Example\n- Your Highlight on Location 11-13 | Added on ${stamp()}\n\n示例\n==========\n"
+        val clipping = ClippingsParser.parse(text).single()
+        val connection = FakeConnection(text, store, kfxPath)
+
+        val result = service().syncDraft(
+            connection, clipping, NoteDraft(clipping.id, "茧房2", kindleBaseText = "茧房"), null
+        )
+
+        assertTrue(result is NoteDraftSyncResult.Accepted)
+        val notes = KindleReaderDataStore.decode(connection.files.getValue(kfxPath)).annotations()
+            .filter { it.type == KindleReaderDataStore.NOTE }
+        assertEquals(1, notes.size)
+        assertEquals("茧房2", notes.single().note)
+    }
+
     @Test fun syncingNotesPrefersTheFullRangeOfAnOverlappingHighlight() {
         val shortSource = source("测试2222").replace("11-13", "11")
             .replace("A complete example highlight.", "A short selection.")
@@ -426,11 +519,48 @@ class KindleNoteWritebackTest {
     private fun service() = KindleNoteWritebackService({ error("Unused in offline tests") }, { time + 1000 })
 
     private fun source(note: String? = null): String {
-        val date = DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy h:mm:ss a", Locale.US)
-            .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(time))
+        val date = stamp()
         return "Example\n- Your Highlight on Location 11-13 | Added on $date\n\nA complete example highlight.\n==========\n" +
             (note?.let { "Example\n- Your Note on Location 11-13 | Added on $date\n\n$it\n==========\n" } ?: "")
     }
+
+    private fun stamp(millis: Long = time): String = DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy h:mm:ss a", Locale.US)
+        .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(millis))
+
+    /** Builds a sidecar holding the given highlight/note position ranges verbatim. */
+    private fun storeWith(
+        highlights: List<Pair<String, String>>,
+        notes: List<Triple<String, String, String>> = emptyList()
+    ): KindleReaderDataStore {
+        val cache = mutableListOf<KrdsValue>(
+            KrdsValue.Integer((if (highlights.isEmpty()) 0 else 1) + (if (notes.isEmpty()) 0 else 1))
+        )
+        if (highlights.isNotEmpty()) {
+            val tree = KrdsValue.ObjectValue("saved.avl.interval.tree",
+                mutableListOf<KrdsValue>(KrdsValue.Integer(highlights.size)))
+            highlights.forEach { (start, end) ->
+                tree.values += annotation("annotation.personal.highlight", start, end, null)
+            }
+            cache += KrdsValue.Integer(KindleReaderDataStore.HIGHLIGHT)
+            cache += tree
+        }
+        if (notes.isNotEmpty()) {
+            val tree = KrdsValue.ObjectValue("saved.avl.interval.tree",
+                mutableListOf<KrdsValue>(KrdsValue.Integer(notes.size)))
+            notes.forEach { (start, end, text) ->
+                tree.values += annotation("annotation.personal.note", start, end, text)
+            }
+            cache += KrdsValue.Integer(KindleReaderDataStore.NOTE)
+            cache += tree
+        }
+        return KindleReaderDataStore(mutableListOf(KrdsValue.ObjectValue("annotation.cache.object", cache)))
+    }
+
+    private fun annotation(name: String, start: String, end: String, text: String?) =
+        KrdsValue.ObjectValue(name, mutableListOf<KrdsValue>(
+            KrdsValue.Utf(start), KrdsValue.Utf(end), KrdsValue.LongValue(time),
+            KrdsValue.LongValue(time), KrdsValue.Utf("0\uFFFC0")
+        ).apply { text?.let { add(KrdsValue.Utf(it)) } })
 
     private fun fixture(start: String = "1500", end: String = "1800"): KindleReaderDataStore {
         val highlight = KrdsValue.ObjectValue("annotation.personal.highlight", mutableListOf(
@@ -449,17 +579,18 @@ class KindleNoteWritebackTest {
     private inner class FakeConnection(
         source: String = this@KindleNoteWritebackTest.source,
         store: KindleReaderDataStore = fixture(),
+        private val sidecarPath: String = path,
         private val failAfterReplace: Int? = null,
         private val corruptReadback: Boolean = false,
         private val externalModification: Boolean = false,
         private val readerState: String = "activeApp=home"
     ) : NoteWritebackConnection {
-        val files = mutableMapOf(path to store.encoded(), KindleNoteWritebackService.CLIPPINGS_PATH to source.toByteArray())
+        val files = mutableMapOf(sidecarPath to store.encoded(), KindleNoteWritebackService.CLIPPINGS_PATH to source.toByteArray())
         val restored = mutableListOf<String>()
         var replaces = 0
-        override fun exec(command: String) = if (command.contains("lipc-get-prop")) readerState else path
+        override fun exec(command: String) = if (command.contains("lipc-get-prop")) readerState else sidecarPath
         override fun download(path: String): ByteArray {
-            if (corruptReadback && replaces > 0 && path == this@KindleNoteWritebackTest.path) return byteArrayOf(0)
+            if (corruptReadback && replaces > 0 && path == sidecarPath) return byteArrayOf(0)
             return files[path]!!.copyOf()
         }
         override fun replace(path: String, original: ByteArray, updated: ByteArray, backup: String) {

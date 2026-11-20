@@ -254,20 +254,37 @@ class KindleNoteWritebackService internal constructor(
     }
 
     private fun SidecarAnnotation.contains(note: SidecarAnnotation): Boolean {
-        if (note.startPosition == startPosition && note.endPosition == startPosition) return true
-        val start = startPosition.toLongOrNull() ?: return false
-        val end = endPosition.toLongOrNull() ?: return false
-        val noteStart = note.startPosition.toLongOrNull() ?: return false
-        val noteEnd = note.endPosition.toLongOrNull() ?: return false
+        val sharedEndAnchor = note.endPosition == endPosition
+        if (sharedEndAnchor && note.startPosition == startPosition) return true
+        val (start, end) = positionRange(startPosition, endPosition, sharedEndAnchor) ?: return false
+        val (noteStart, noteEnd) = positionRange(note.startPosition, note.endPosition, sharedEndAnchor)
+            ?: return false
         return noteStart >= start && noteEnd >= noteStart && noteEnd <= end
     }
 
     private fun SidecarAnnotation.mightOverlap(note: SidecarAnnotation): Boolean {
-        val start = startPosition.toLongOrNull() ?: return true
-        val end = endPosition.toLongOrNull() ?: return true
-        val noteStart = note.startPosition.toLongOrNull() ?: return true
-        val noteEnd = note.endPosition.toLongOrNull() ?: return true
+        val sharedEndAnchor = note.endPosition == endPosition
+        val (start, end) = positionRange(startPosition, endPosition, sharedEndAnchor) ?: return true
+        val (noteStart, noteEnd) = positionRange(note.startPosition, note.endPosition, sharedEndAnchor)
+            ?: return true
         return noteStart <= end && noteEnd >= start
+    }
+
+    /**
+     * Reading offsets for one annotation range, or null when this sidecar hides them.
+     * AZW3 stores a plain offset; MOBI7 prefixes it with chapter fields
+     * ("492690:492458:3263:REFU…"). KFX keeps the offset behind an opaque locator
+     * ("AT8BAABaAAAA:11107"), so it is only comparable to a range that ends at the
+     * exact same anchor; callers pass whether that holds.
+     */
+    private fun positionRange(start: String, end: String, sharedEndAnchor: Boolean): Pair<Long, Long>? {
+        val leadStart = start.substringBefore(':').toLongOrNull()
+        val leadEnd = end.substringBefore(':').toLongOrNull()
+        if (leadStart != null && leadEnd != null) return leadStart to leadEnd
+        if (!sharedEndAnchor) return null
+        val tailStart = start.substringAfterLast(':').toLongOrNull()
+        val tailEnd = end.substringAfterLast(':').toLongOrNull()
+        return if (tailStart != null && tailEnd != null) tailStart to tailEnd else null
     }
 
     private data class PreparedWrite(val clipping: KindleClipping, val match: AnnotationMatch)
